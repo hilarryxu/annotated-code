@@ -58,10 +58,18 @@ using std::memcmp;
 using std::strlen;
 using std::string;
 
+//=====================================================================
+// StringPiece
+//
+//   字符串视图，不管理实际内存只是只读关联，可接受
+//   const char *, string 作为参数构造，内部维护一个指针，一个
+//   整形长度，复制拷贝开销小。
+//=====================================================================
+
 class PCRECPP_EXP_DEFN StringPiece {
  private:
-  const char*   ptr_;
-  int           length_;
+  const char*   ptr_;  // 指向实际的字符串缓冲区
+  int           length_;  // 长度
 
  public:
   // We provide non-explicit singleton constructors so users can pass
@@ -85,6 +93,11 @@ class PCRECPP_EXP_DEFN StringPiece {
   // terminated string.  Use "as_string().c_str()" if you really need to do
   // this.  Or better yet, change your routine so it does not rely on NUL
   // termination.
+
+  //---------------------------------------------------------------------
+  // data() 返回原始指针，由于不能保证数据一定是 NULL 结尾的字符串
+  // 缓冲区，可以用 as_string().c_str() 替代。
+  //---------------------------------------------------------------------
   const char* data() const { return ptr_; }
   int size() const { return length_; }
   bool empty() const { return length_ == 0; }
@@ -130,6 +143,9 @@ class PCRECPP_EXP_DEFN StringPiece {
   STRINGPIECE_BINARY_PREDICATE(>,  >);
 #undef STRINGPIECE_BINARY_PREDICATE
 
+  //---------------------------------------------------------------------
+  // 比较操作
+  //---------------------------------------------------------------------
   int compare(const StringPiece& x) const {
     int r = memcmp(ptr_, x.ptr_, length_ < x.length_ ? length_ : x.length_);
     if (r == 0) {
@@ -139,10 +155,16 @@ class PCRECPP_EXP_DEFN StringPiece {
     return r;
   }
 
+  //---------------------------------------------------------------------
+  // 转成 string
+  //---------------------------------------------------------------------
   string as_string() const {
     return string(data(), size());
   }
 
+  //---------------------------------------------------------------------
+  // 拷贝到 string
+  //---------------------------------------------------------------------
   void CopyToString(string* target) const {
     target->assign(ptr_, length_);
   }
@@ -162,6 +184,10 @@ class PCRECPP_EXP_DEFN StringPiece {
 //  cannot safely store a StringPiece into an STL container
 // ------------------------------------------------------------------
 
+//=====================================================================
+// 编译器相关的 type_traits
+//=====================================================================
+
 #ifdef HAVE_TYPE_TRAITS
 // This makes vector<StringPiece> really fast for some STL implementations
 template<> struct __type_traits<pcrecpp::StringPiece> {
@@ -172,6 +198,10 @@ template<> struct __type_traits<pcrecpp::StringPiece> {
   typedef __true_type    is_POD_type;
 };
 #endif
+
+//=====================================================================
+// 支持流式打印
+//=====================================================================
 
 // allow StringPiece to be logged
 PCRECPP_EXP_DECL std::ostream& operator<<(std::ostream& o,
