@@ -254,26 +254,36 @@ static void *do_slabs_alloc(const size_t size, unsigned int id) {
     return ret;
 }
 
+// 释放内存
+//   ptr: item 指针
+//   size: item 大小
+//   id: slabs_clsid
 static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     slabclass_t *p;
     item *it;
 
     assert(((item *)ptr)->slabs_clsid == 0);
     assert(id >= POWER_SMALLEST && id <= power_largest);
+    // 检测 slabs_clsid 合法性
     if (id < POWER_SMALLEST || id > power_largest)
         return;
 
     MEMCACHED_SLABS_FREE(size, id, ptr);
+    // 获取对应的 slabclass
     p = &slabclass[id];
 
     it = (item *)ptr;
+    // 标记为空闲
     it->it_flags |= ITEM_SLABBED;
+    // 头插到空闲 item 列表
     it->prev = 0;
     it->next = p->slots;
     if (it->next) it->next->prev = it;
     p->slots = it;
 
+    // 空闲 item 个数 +1
     p->sl_curr++;
+    // 空闲空间增加
     p->requested -= size;
     return;
 }
@@ -406,6 +416,7 @@ void *slabs_alloc(size_t size, unsigned int id) {
     return ret;
 }
 
+// 加锁版本的 slabs_free
 void slabs_free(void *ptr, size_t size, unsigned int id) {
     pthread_mutex_lock(&slabs_lock);
     do_slabs_free(ptr, size, id);

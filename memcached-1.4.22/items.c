@@ -238,18 +238,25 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
     return it;
 }
 
+// 释放 item
 void item_free(item *it) {
+    // 计算 item 的大小
     size_t ntotal = ITEM_ntotal(it);
     unsigned int clsid;
     assert((it->it_flags & ITEM_LINKED) == 0);
+    // 不能为 LRU 的头指针
     assert(it != heads[it->slabs_clsid]);
+    // 不能为 LRU 的尾指针
     assert(it != tails[it->slabs_clsid]);
+    // 引用计数必须为 0
     assert(it->refcount == 0);
 
     /* so slab size changer can tell later if item is already free or not */
     clsid = it->slabs_clsid;
+    // 将 slabs_clsid 置为 0
     it->slabs_clsid = 0;
     DEBUG_REFCNT(it, 'F');
+    // 执行 salb 条目释放内存操作
     slabs_free(it, ntotal, clsid);
 }
 
@@ -288,25 +295,31 @@ static void item_link_q(item *it) { /* item is the new head */
     return;
 }
 
+// 将 item 从 slabclass 的 LRU 链中移除
 static void item_unlink_q(item *it) {
     item **head, **tail;
     assert(it->slabs_clsid < LARGEST_ID);
     head = &heads[it->slabs_clsid];
     tail = &tails[it->slabs_clsid];
 
+    // 头指针特殊处理
     if (*head == it) {
         assert(it->prev == 0);
         *head = it->next;
     }
+    // 尾指针特殊处理
     if (*tail == it) {
         assert(it->next == 0);
         *tail = it->prev;
     }
+    // 循环链表断言
     assert(it->next != it);
     assert(it->prev != it);
 
+    // 执行断开链表节点操作
     if (it->next) it->next->prev = it->prev;
     if (it->prev) it->prev->next = it->next;
+    // 对应 slabclass 下 item 计数 -1
     sizes[it->slabs_clsid]--;
     return;
 }
@@ -334,17 +347,24 @@ int do_item_link(item *it, const uint32_t hv) {
     return 1;
 }
 
+// 从散列表的 LRU 链中移除
 void do_item_unlink(item *it, const uint32_t hv) {
     MEMCACHED_ITEM_UNLINK(ITEM_key(it), it->nkey, it->nbytes);
     mutex_lock(&cache_lock);
+    // 判断是否在 LRU 链中
     if ((it->it_flags & ITEM_LINKED) != 0) {
+        // 修改状态
         it->it_flags &= ~ITEM_LINKED;
+        // 更新统计信息
         STATS_LOCK();
         stats.curr_bytes -= ITEM_ntotal(it);
         stats.curr_items -= 1;
         STATS_UNLOCK();
+        // 从散列表中删除
         assoc_delete(ITEM_key(it), it->nkey, hv);
+        // 从 LRU 队列中移除
         item_unlink_q(it);
+        // 删除 item （会检测引用计数的）
         do_item_remove(it);
     }
     mutex_unlock(&cache_lock);
@@ -365,12 +385,14 @@ void do_item_unlink_nolock(item *it, const uint32_t hv) {
     }
 }
 
+// 删除 item
 void do_item_remove(item *it) {
     MEMCACHED_ITEM_REMOVE(ITEM_key(it), it->nkey, it->nbytes);
     assert((it->it_flags & ITEM_SLABBED) == 0);
     assert(it->refcount > 0);
 
     if (refcount_decr(&it->refcount) == 0) {
+        // 引用计数为 0 时，释放 item
         item_free(it);
     }
 }
@@ -573,8 +595,10 @@ void do_item_stats_sizes(ADD_STAT add_stats, void *c) {
 /** wrapper around assoc_find which does the lazy expiration logic */
 item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     //mutex_lock(&cache_lock);
+    // 在散列表中查找
     item *it = assoc_find(key, nkey, hv);
     if (it != NULL) {
+        // 增加引用计数
         refcount_incr(&it->refcount);
         /* Optimization for slab reassignment. prevents popular items from
          * jamming in busy wait. Can only do this here to satisfy lock order
@@ -589,6 +613,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     //mutex_unlock(&cache_lock);
     int was_found = 0;
 
+    // 打印调试信息
     if (settings.verbose > 2) {
         int ii;
         if (it == NULL) {
@@ -605,6 +630,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     if (it != NULL) {
         if (settings.oldest_live != 0 && settings.oldest_live <= current_time &&
             it->time <= settings.oldest_live) {
+            // 过期删除机制，全局配置的
             do_item_unlink(it, hv);
             do_item_remove(it);
             it = NULL;
@@ -612,13 +638,15 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
                 fprintf(stderr, " -nuked by flush");
             }
         } else if (it->exptime != 0 && it->exptime <= current_time) {
-            do_item_unlink(it, hv);
-            do_item_remove(it);
+            // 判断是否过期
+            do_item_unlink(it, hv);  // 从散列表和 LRU 链中移除
+            do_item_remove(it);  // 删除 item
             it = NULL;
             if (was_found) {
                 fprintf(stderr, " -nuked by expire");
             }
         } else {
+            // 标记为已经读取
             it->it_flags |= ITEM_FETCHED;
             DEBUG_REFCNT(it, '+');
         }

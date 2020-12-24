@@ -487,11 +487,15 @@ item *item_alloc(char *key, size_t nkey, int flags, rel_time_t exptime, int nbyt
  * Returns an item if it hasn't been marked as expired,
  * lazy-expiring as needed.
  */
+// GET 命令
 item *item_get(const char *key, const size_t nkey) {
     item *it;
     uint32_t hv;
+    // 计算 hash 值
     hv = hash(key, nkey);
+    // 分 bucket 加锁，减少锁竞争
     item_lock(hv);
+    // 执行 get 操作
     it = do_item_get(key, nkey, hv);
     item_unlock(hv);
     return it;
