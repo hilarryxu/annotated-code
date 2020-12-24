@@ -41,23 +41,26 @@
 
 #include "memcached.h"
 
+// 后台运行例程
 int daemonize(int nochdir, int noclose)
 {
     int fd;
 
     switch (fork()) {
     case -1:
-        return (-1);
+        return (-1);  // 失败，退出程序
     case 0:
-        break;
+        break;  // 子进程继续执行后面的流程
     default:
-        _exit(EXIT_SUCCESS);
+        _exit(EXIT_SUCCESS);  // 父进程正常退出
     }
 
+    // 成为新的会话领头进程
     if (setsid() == -1)
         return (-1);
 
     if (nochdir == 0) {
+        // 切换当前进程为根目录
         if(chdir("/") != 0) {
             perror("chdir");
             return (-1);
@@ -65,20 +68,24 @@ int daemonize(int nochdir, int noclose)
     }
 
     if (noclose == 0 && (fd = open("/dev/null", O_RDWR, 0)) != -1) {
+        // 将标准输入重定向到 /dev/null
         if(dup2(fd, STDIN_FILENO) < 0) {
             perror("dup2 stdin");
             return (-1);
         }
+        // 将标准输出重定向到 /dev/null
         if(dup2(fd, STDOUT_FILENO) < 0) {
             perror("dup2 stdout");
             return (-1);
         }
+        // 将标准错误重定向到 /dev/null
         if(dup2(fd, STDERR_FILENO) < 0) {
             perror("dup2 stderr");
             return (-1);
         }
 
         if (fd > STDERR_FILENO) {
+            // 关掉 fd
             if(close(fd) < 0) {
                 perror("close");
                 return (-1);
