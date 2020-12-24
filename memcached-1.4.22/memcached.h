@@ -95,6 +95,7 @@
     } \
 }
 
+// 获取 item 的 key 字符串指针
 #define ITEM_key(item) (((char*)&((item)->data)) \
          + (((item)->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
 
@@ -332,6 +333,7 @@ extern struct stats stats;
 extern time_t process_started;
 extern struct settings settings;
 
+// item 的状态标记取值
 #define ITEM_LINKED 1
 #define ITEM_CAS 2
 
@@ -344,21 +346,33 @@ extern struct settings settings;
  * Structure for storing items within memcached.
  */
 typedef struct _stritem {
+    // 双向链表指针，可能在 LRU 链中，也可能在 freelist 链中
     struct _stritem *next;
     struct _stritem *prev;
+    // 散列表中的下一个 item 地址
     struct _stritem *h_next;    /* hash chain next */
+    // 最近操作的时间，只有 set/add/replace 等操作才更新该字段
+    // flush 时会比较该时间
     rel_time_t      time;       /* least recent access */
+    // 过期时间
     rel_time_t      exptime;    /* expire time */
+    // value 数据大小
     int             nbytes;     /* size of data */
+    // 引用计数，没有任何线程访问这个 item 才删除对象
     unsigned short  refcount;
+    // flags length 那块的长度
     uint8_t         nsuffix;    /* length of flags-and-length string */
+    // 状态标记
     uint8_t         it_flags;   /* ITEM_* above */
+    // 所在 slabclass id 值
     uint8_t         slabs_clsid;/* which slab class we're in */
+    // key 长度，不包括结尾的 '\0'
     uint8_t         nkey;       /* key length, w/terminating null and padding */
     /* this odd type prevents type-punning issues when we do
      * the little shuffle to save space when not using CAS. */
+    // 数据存储部分
     union {
-        uint64_t cas;
+        uint64_t cas;  // cas 版本变量值
         char end;
     } data[];
     /* if it_flags & ITEM_CAS we have 8 bytes CAS */

@@ -3354,6 +3354,9 @@ static void process_delete_command(conn *c, token_t *tokens, const size_t ntoken
         c->thread->stats.slab_stats[it->slabs_clsid].delete_hits++;
         pthread_mutex_unlock(&c->thread->stats.mutex);
 
+        // 删除命令分两步
+        // 1. 从 LRU 链中移除
+        // 2. 引用计数减为 0 后将 item 头插到对应 slabclass 的 freelist 上
         item_unlink(it);
         item_remove(it);      /* release our reference */
         out_string(c, "DELETED");
