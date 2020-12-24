@@ -104,6 +104,7 @@ static void conn_free(conn *c);
 struct stats stats;
 struct settings settings;
 time_t process_started;     /* when the process was started */
+// 全局的客户端连接指针数组，按 sfd 索引取值
 conn **conns;
 
 struct slab_rebalance slab_rebal;
@@ -341,6 +342,7 @@ static const char *prot_text(enum protocol prot) {
     return rv;
 }
 
+// 新建一个客户端连接
 conn *conn_new(const int sfd, enum conn_states init_state,
                 const int event_flags,
                 const int read_buffer_size, enum network_transport transport,
@@ -348,8 +350,10 @@ conn *conn_new(const int sfd, enum conn_states init_state,
     conn *c;
 
     assert(sfd >= 0 && sfd < max_fds);
+    // 已经有了就复用
     c = conns[sfd];
 
+    // 新建一个
     if (NULL == c) {
         if (!(c = (conn *)calloc(1, sizeof(conn)))) {
             STATS_LOCK();
@@ -367,6 +371,7 @@ conn *conn_new(const int sfd, enum conn_states init_state,
         c->msglist = 0;
         c->hdrbuf = 0;
 
+        // 读缓冲区大小
         c->rsize = read_buffer_size;
         c->wsize = DATA_BUFFER_SIZE;
         c->isize = ITEM_LIST_INITIAL;
@@ -375,7 +380,9 @@ conn *conn_new(const int sfd, enum conn_states init_state,
         c->msgsize = MSG_LIST_INITIAL;
         c->hdrsize = 0;
 
+        // 分配读缓冲区
         c->rbuf = (char *)malloc((size_t)c->rsize);
+        // 分配写缓冲区
         c->wbuf = (char *)malloc((size_t)c->wsize);
         c->ilist = (item **)malloc(sizeof(item *) * c->isize);
         c->suffixlist = (char **)malloc(sizeof(char *) * c->suffixsize);
@@ -392,15 +399,20 @@ conn *conn_new(const int sfd, enum conn_states init_state,
             return NULL;
         }
 
+        // 更新统计信息
         STATS_LOCK();
         stats.conn_structs++;
         STATS_UNLOCK();
 
+        // 记下 client socket fd
         c->sfd = sfd;
+        // 存储到全局的连接数组中
         conns[sfd] = c;
     }
 
+    // 传输方式
     c->transport = transport;
+    // 协议类型
     c->protocol = settings.binding_protocol;
 
     /* unix socket mode doesn't need this, so zeroed out.  but why
@@ -420,6 +432,7 @@ conn *conn_new(const int sfd, enum conn_states init_state,
         }
     }
 
+    // 打印调试信息
     if (settings.verbose > 1) {
         if (init_state == conn_listening) {
             fprintf(stderr, "<%d server listening (%s)\n", sfd,
@@ -440,6 +453,7 @@ conn *conn_new(const int sfd, enum conn_states init_state,
         }
     }
 
+    // 设置初始状态
     c->state = init_state;
     c->rlbytes = 0;
     c->cmd = -1;
@@ -462,15 +476,18 @@ conn *conn_new(const int sfd, enum conn_states init_state,
 
     c->noreply = false;
 
+    // 设置监听事件
     event_set(&c->event, sfd, event_flags, event_handler, (void *)c);
     event_base_set(base, &c->event);
     c->ev_flags = event_flags;
 
+    // 关联到对应的 ioloop 上
     if (event_add(&c->event, 0) == -1) {
         perror("event_add");
         return NULL;
     }
 
+    // 更新统计信息
     STATS_LOCK();
     stats.curr_conns++;
     stats.total_conns++;
@@ -5535,6 +5552,7 @@ int main (int argc, char **argv) {
     }
 
     /* initialize main thread libevent instance */
+    // 主线程的 ioloop
     main_base = event_init();
 
     /* initialize other stuff */

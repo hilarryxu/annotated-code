@@ -18,6 +18,7 @@
 #define ITEMS_PER_ALLOC 64
 
 /* An item in the connection queue. */
+// 连接任务
 typedef struct conn_queue_item CQ_ITEM;
 struct conn_queue_item {
     int               sfd;
@@ -29,6 +30,7 @@ struct conn_queue_item {
 };
 
 /* A connection queue. */
+// 连接任务队列
 typedef struct conn_queue CQ;
 struct conn_queue {
     CQ_ITEM *head;
@@ -63,12 +65,14 @@ unsigned int item_lock_hashpower;
 #define hashsize(n) ((unsigned long int)1<<(n))
 #define hashmask(n) (hashsize(n)-1)
 
+// 主线程
 static LIBEVENT_DISPATCHER_THREAD dispatcher_thread;
 
 /*
  * Each libevent instance has a wakeup pipe, which other threads
  * can use to signal that they've put a new connection on its queue.
  */
+// 工作线程数组
 static LIBEVENT_THREAD *threads;
 
 /*
@@ -138,12 +142,14 @@ void item_unlock(uint32_t hv) {
     mutex_unlock(&item_locks[hv & hashmask(item_lock_hashpower)]);
 }
 
+// 等待工作线程组全部运行起来
 static void wait_for_thread_registration(int nthreads) {
     while (init_count < nthreads) {
         pthread_cond_wait(&init_cond, &init_lock);
     }
 }
 
+// 增加初始化计数并通知主线程
 static void register_thread_initialized(void) {
     pthread_mutex_lock(&init_lock);
     init_count++;
@@ -202,8 +208,11 @@ void pause_threads(enum pause_thread_types type) {
 /*
  * Initializes a connection queue.
  */
+// 初始化连接任务队列
 static void cq_init(CQ *cq) {
+    // 初始化锁
     pthread_mutex_init(&cq->lock, NULL);
+    // 头尾指针置空
     cq->head = NULL;
     cq->tail = NULL;
 }
@@ -213,6 +222,7 @@ static void cq_init(CQ *cq) {
  * one.
  * Returns the item, or NULL if no item is available
  */
+// 从队列头部取出一个连接任务
 static CQ_ITEM *cq_pop(CQ *cq) {
     CQ_ITEM *item;
 
@@ -288,6 +298,7 @@ static CQ_ITEM *cqi_new(void) {
 /*
  * Frees a connection queue item (adds it to the freelist.)
  */
+// 头插到全局的 cqi_freelist 上作为复用
 static void cqi_free(CQ_ITEM *item) {
     pthread_mutex_lock(&cqi_freelist_lock);
     item->next = cqi_freelist;
@@ -299,6 +310,7 @@ static void cqi_free(CQ_ITEM *item) {
 /*
  * Creates a worker thread.
  */
+// 调用 pthread_create 创建工作线程
 static void create_worker(void *(*func)(void *), void *arg) {
     pthread_t       thread;
     pthread_attr_t  attr;
@@ -326,7 +338,9 @@ void accept_new_conns(const bool do_accept) {
 /*
  * Set up a thread's information.
  */
+// 设置工作线程
 static void setup_thread(LIBEVENT_THREAD *me) {
+    // 新建一个 ioloop
     me->base = event_init();
     if (! me->base) {
         fprintf(stderr, "Can't allocate event base\n");
@@ -334,27 +348,33 @@ static void setup_thread(LIBEVENT_THREAD *me) {
     }
 
     /* Listen for notifications from other threads */
+    // 设置通知管道的监听事件
     event_set(&me->notify_event, me->notify_receive_fd,
               EV_READ | EV_PERSIST, thread_libevent_process, me);
     event_base_set(me->base, &me->notify_event);
 
+    // 关联到 ioloop 中去
     if (event_add(&me->notify_event, 0) == -1) {
         fprintf(stderr, "Can't monitor libevent notify pipe\n");
         exit(1);
     }
 
+    // 分配连接任务队列
     me->new_conn_queue = malloc(sizeof(struct conn_queue));
     if (me->new_conn_queue == NULL) {
         perror("Failed to allocate memory for connection queue");
         exit(EXIT_FAILURE);
     }
+    // 初始化连接任务队列
     cq_init(me->new_conn_queue);
 
+    // 初始化该线程统计数据对应的互斥锁
     if (pthread_mutex_init(&me->stats.mutex, NULL) != 0) {
         perror("Failed to initialize mutex");
         exit(EXIT_FAILURE);
     }
 
+    // cache 相关设置，暂时不关心
     me->suffix_cache = cache_create("suffix", SUFFIX_SIZE, sizeof(char*),
                                     NULL, NULL);
     if (me->suffix_cache == NULL) {
@@ -366,6 +386,7 @@ static void setup_thread(LIBEVENT_THREAD *me) {
 /*
  * Worker thread: main event loop
  */
+// 工作线程 main 过程
 static void *worker_libevent(void *arg) {
     LIBEVENT_THREAD *me = arg;
 
@@ -375,6 +396,7 @@ static void *worker_libevent(void *arg) {
 
     register_thread_initialized();
 
+    // 开始 ioloop 循环
     event_base_loop(me->base, 0);
     return NULL;
 }
@@ -384,6 +406,9 @@ static void *worker_libevent(void *arg) {
  * Processes an incoming "handle a new connection" item. This is called when
  * input arrives on the libevent wakeup pipe.
  */
+// 处理主线程发过来的命令
+//   c: 新的连接
+//   p: ?
 static void thread_libevent_process(int fd, short which, void *arg) {
     LIBEVENT_THREAD *me = arg;
     CQ_ITEM *item;
@@ -395,12 +420,15 @@ static void thread_libevent_process(int fd, short which, void *arg) {
 
     switch (buf[0]) {
     case 'c':
+    // 从连接任务队列中取一个任务
     item = cq_pop(me->new_conn_queue);
 
     if (NULL != item) {
+        // 根据任务描述的属性信息，新建一个连接
         conn *c = conn_new(item->sfd, item->init_state, item->event_flags,
                            item->read_buffer_size, item->transport, me->base);
         if (c == NULL) {
+            // 失败处理
             if (IS_UDP(item->transport)) {
                 fprintf(stderr, "Can't listen for events on UDP socket\n");
                 exit(1);
@@ -414,6 +442,7 @@ static void thread_libevent_process(int fd, short which, void *arg) {
         } else {
             c->thread = me;
         }
+        // 回收到全局的连接任务 freelist 上去，复用
         cqi_free(item);
     }
         break;
@@ -804,6 +833,7 @@ void memcached_thread_init(int nthreads, struct event_base *main_base) {
     item_lock_count = hashsize(power);
     item_lock_hashpower = power;
 
+    // 按桶数量分配 bucket 锁
     item_locks = calloc(item_lock_count, sizeof(pthread_mutex_t));
     if (! item_locks) {
         perror("Can't allocate item locks");
@@ -813,16 +843,19 @@ void memcached_thread_init(int nthreads, struct event_base *main_base) {
         pthread_mutex_init(&item_locks[i], NULL);
     }
 
+    // 分配工作线程结构体
     threads = calloc(nthreads, sizeof(LIBEVENT_THREAD));
     if (! threads) {
         perror("Can't allocate thread descriptors");
         exit(1);
     }
 
+    // 初始化主线程结构
     dispatcher_thread.base = main_base;
     dispatcher_thread.thread_id = pthread_self();
 
     for (i = 0; i < nthreads; i++) {
+        // 初始化工作线程的通知管道
         int fds[2];
         if (pipe(fds)) {
             perror("Can't create notify pipe");
@@ -832,17 +865,20 @@ void memcached_thread_init(int nthreads, struct event_base *main_base) {
         threads[i].notify_receive_fd = fds[0];
         threads[i].notify_send_fd = fds[1];
 
+        // 设置工作线程
         setup_thread(&threads[i]);
         /* Reserve three fds for the libevent base, and two for the pipe */
         stats.reserved_fds += 5;
     }
 
     /* Create threads after we've done all the libevent setup. */
+    // 创建并启动工作线程组
     for (i = 0; i < nthreads; i++) {
         create_worker(worker_libevent, &threads[i]);
     }
 
     /* Wait for all the threads to set themselves up before returning. */
+    // 等待工作线程组全部运行起来
     pthread_mutex_lock(&init_lock);
     wait_for_thread_registration(nthreads);
     pthread_mutex_unlock(&init_lock);
