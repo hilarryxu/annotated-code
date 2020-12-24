@@ -241,13 +241,17 @@ static CQ_ITEM *cq_pop(CQ *cq) {
 /*
  * Adds an item to a connection queue.
  */
+// 投递任务到某个工作线程的任务队列中去
+// 加了锁，所以是线程安全的
 static void cq_push(CQ *cq, CQ_ITEM *item) {
     item->next = NULL;
 
     pthread_mutex_lock(&cq->lock);
     if (NULL == cq->tail)
+        // 队列为空情况的处理
         cq->head = item;
     else
+        // 插入到队列尾部
         cq->tail->next = item;
     cq->tail = item;
     pthread_mutex_unlock(&cq->lock);
@@ -461,8 +465,10 @@ static int last_thread = -1;
  * from the main thread, either during initialization (for UDP) or because
  * of an incoming connection.
  */
+// 新链接到来后分配给工作线程组其中一个去处理
 void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
                        int read_buffer_size, enum network_transport transport) {
+    // 新建一个任务
     CQ_ITEM *item = cqi_new();
     char buf[1];
     if (item == NULL) {
@@ -472,21 +478,27 @@ void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
         return ;
     }
 
+    // round robin 算法分配 tid
     int tid = (last_thread + 1) % settings.num_threads;
 
+    // 得到对应工作线程结构指针
     LIBEVENT_THREAD *thread = threads + tid;
 
     last_thread = tid;
 
+    // 设置任务
     item->sfd = sfd;
+    // 初始状态 conn_new_cmd
     item->init_state = init_state;
     item->event_flags = event_flags;
     item->read_buffer_size = read_buffer_size;
     item->transport = transport;
 
+    // 投递到工作线程的任务队列中去
     cq_push(thread->new_conn_queue, item);
 
     MEMCACHED_CONN_DISPATCH(sfd, thread->thread_id);
+    // 通过管道发送 c 命令，唤醒工作线程处理任务
     buf[0] = 'c';
     if (write(thread->notify_send_fd, buf, 1) != 1) {
         perror("Writing to thread notify pipe");

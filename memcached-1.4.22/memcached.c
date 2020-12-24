@@ -111,6 +111,7 @@ struct slab_rebalance slab_rebal;
 volatile int slab_rebalance_signal;
 
 /** file scope variables **/
+// 监听套接字链表
 static conn *listen_conn = NULL;
 static int max_fds;
 static struct event_base *main_base;
@@ -4024,6 +4025,7 @@ static enum transmit_result transmit(conn *c) {
     }
 }
 
+// 连接事件处理状态机（重要）
 static void drive_machine(conn *c) {
     bool stop = false;
     int sfd;
@@ -4052,9 +4054,11 @@ static void drive_machine(conn *c) {
                 sfd = accept(c->sfd, (struct sockaddr *)&addr, &addrlen);
             }
 #else
+            // 获得一个客户端连接
             sfd = accept(c->sfd, (struct sockaddr *)&addr, &addrlen);
 #endif
             if (sfd == -1) {
+                // 一些错误处理流程
                 if (use_accept4 && errno == ENOSYS) {
                     use_accept4 = 0;
                     continue;
@@ -4075,6 +4079,7 @@ static void drive_machine(conn *c) {
                 break;
             }
             if (!use_accept4) {
+                // 设置为非阻塞
                 if (fcntl(sfd, F_SETFL, fcntl(sfd, F_GETFL) | O_NONBLOCK) < 0) {
                     perror("setting O_NONBLOCK");
                     close(sfd);
@@ -4084,6 +4089,8 @@ static void drive_machine(conn *c) {
 
             if (settings.maxconns_fast &&
                 stats.curr_conns + stats.reserved_fds >= settings.maxconns - 1) {
+                // 超出最大连接数后
+                // 发个错误响应给客户端然后关闭连接
                 str = "ERROR Too many open connections\r\n";
                 res = write(sfd, str, strlen(str));
                 close(sfd);
@@ -4091,10 +4098,12 @@ static void drive_machine(conn *c) {
                 stats.rejected_conns++;
                 STATS_UNLOCK();
             } else {
+                // 分发给工作线程组
                 dispatch_conn_new(sfd, conn_new_cmd, EV_READ | EV_PERSIST,
                                      DATA_BUFFER_SIZE, tcp_transport);
             }
 
+            // 处理完毕退出状态机
             stop = true;
             break;
 
@@ -4442,11 +4451,12 @@ static void maximize_sndbuf(const int sfd) {
  *        when they are successfully added to the list of ports we
  *        listen on.
  */
+// 创建服务端监听套接字
 static int server_socket(const char *interface,
                          int port,
                          enum network_transport transport,
                          FILE *portnumber_file) {
-    int sfd;
+    int sfd;  // server socket fd
     struct linger ling = {0, 0};
     struct addrinfo *ai;
     struct addrinfo *next;
@@ -4497,10 +4507,12 @@ static int server_socket(const char *interface,
         }
 #endif
 
+        // 设置 SO_REUSEADDR
         setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (void *)&flags, sizeof(flags));
         if (IS_UDP(transport)) {
             maximize_sndbuf(sfd);
         } else {
+            // 设置 SO_KEEPALIVE, SO_LINGER, TCP_NODELAY 等选型
             error = setsockopt(sfd, SOL_SOCKET, SO_KEEPALIVE, (void *)&flags, sizeof(flags));
             if (error != 0)
                 perror("setsockopt");
@@ -4514,6 +4526,7 @@ static int server_socket(const char *interface,
                 perror("setsockopt");
         }
 
+        // 绑定地址端口
         if (bind(sfd, next->ai_addr, next->ai_addrlen) == -1) {
             if (errno != EADDRINUSE) {
                 perror("bind()");
@@ -4525,6 +4538,7 @@ static int server_socket(const char *interface,
             continue;
         } else {
             success++;
+            // 开始监听
             if (!IS_UDP(transport) && listen(sfd, settings.backlog) == -1) {
                 perror("listen()");
                 close(sfd);
@@ -4539,6 +4553,7 @@ static int server_socket(const char *interface,
                     struct sockaddr_in6 in6;
                 } my_sockaddr;
                 socklen_t len = sizeof(my_sockaddr);
+                // 打印地址端口信息
                 if (getsockname(sfd, (struct sockaddr*)&my_sockaddr, &len)==0) {
                     if (next->ai_addr->sa_family == AF_INET) {
                         fprintf(portnumber_file, "%s INET: %u\n",
@@ -4571,12 +4586,18 @@ static int server_socket(const char *interface,
                                   UDP_READ_BUFFER_SIZE, transport);
             }
         } else {
+            // 新建链接
+            // 初始状态设置为 conn_listening
+            // 关联到主线程的 ioloop 中
+            // 监听可读事件，等待客户端连接到来
+            // NOTE(xcc): 分析 conn_listening 状态处理就是服务端接受客户端连接流程
             if (!(listen_conn_add = conn_new(sfd, conn_listening,
                                              EV_READ | EV_PERSIST, 1,
                                              transport, main_base))) {
                 fprintf(stderr, "failed to create listening connection\n");
                 exit(EXIT_FAILURE);
             }
+            // 插入到全局的监听套接字列表中
             listen_conn_add->next = listen_conn;
             listen_conn = listen_conn_add;
         }
@@ -4588,11 +4609,13 @@ static int server_socket(const char *interface,
     return success == 0;
 }
 
+// 创建服务端监听套接字
 static int server_sockets(int port, enum network_transport transport,
                           FILE *portnumber_file) {
     if (settings.inter == NULL) {
         return server_socket(settings.inter, port, transport, portnumber_file);
     } else {
+        // 多端口监听，暂不关心这一块
         // tokenize them and bind to each one of them..
         char *b;
         int ret = 0;
@@ -5594,6 +5617,10 @@ int main (int argc, char **argv) {
     }
 
     /* create the listening socket, bind it, and init */
+    // 主线程监听套接字，有 3 种方式
+    // 1. UNIX Domain socket
+    // 2. TCP socket
+    // 3. UDP socket
     if (settings.socketpath == NULL) {
         const char *portnumber_filename = getenv("MEMCACHED_PORT_FILENAME");
         char temp_portnumber_filename[PATH_MAX];
@@ -5612,6 +5639,7 @@ int main (int argc, char **argv) {
         }
 
         errno = 0;
+        // 主要分析 TCP 方式
         if (settings.port && server_sockets(settings.port, tcp_transport,
                                            portnumber_file)) {
             vperror("failed to listen on TCP port %d", settings.port);
