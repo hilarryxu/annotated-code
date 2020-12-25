@@ -32,11 +32,13 @@ typedef  unsigned long  int  ub4;   /* unsigned 4-byte quantities */
 typedef  unsigned       char ub1;   /* unsigned 1-byte quantities */
 
 /* how many powers of 2's worth of buckets we use */
+// 默认 65536 个桶
 unsigned int hashpower = HASHPOWER_DEFAULT;
 
 #define hashsize(n) ((ub4)1<<(n))
 #define hashmask(n) (hashsize(n)-1)
 
+// 分了主散列表和旧散列表，用于后台逐步 rehash 不影响现有操作
 /* Main hash table. This is where we look except during expansion. */
 static item** primary_hashtable = 0;
 
@@ -47,9 +49,11 @@ static item** primary_hashtable = 0;
 static item** old_hashtable = 0;
 
 /* Number of items in the hash table. */
+// 散列表中 item 个数
 static unsigned int hash_items = 0;
 
 /* Flag: Are we in the middle of expanding now? */
+// rehash 相关状态
 static bool expanding = false;
 static bool started_expanding = false;
 
@@ -59,10 +63,12 @@ static bool started_expanding = false;
  */
 static unsigned int expand_bucket = 0;
 
+// 初始化散列表（分配桶）
 void assoc_init(const int hashtable_init) {
     if (hashtable_init) {
         hashpower = hashtable_init;
     }
+    // 默认分配 65536 个桶
     primary_hashtable = calloc(hashsize(hashpower), sizeof(void *));
     if (! primary_hashtable) {
         fprintf(stderr, "Failed to init hashtable.\n");
@@ -78,6 +84,7 @@ item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
     item *it;
     unsigned int oldbucket;
 
+    // 判断 rehash 状态决定用那个散列表指针
     if (expanding &&
         (oldbucket = (hv & hashmask(hashpower - 1))) >= expand_bucket)
     {
@@ -89,6 +96,7 @@ item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
     item *ret = NULL;
     int depth = 0;
     while (it) {
+        // 遍历开链
         if ((nkey == it->nkey) && (memcmp(key, ITEM_key(it), nkey) == 0)) {
             ret = it;
             break;
@@ -97,12 +105,13 @@ item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
         ++depth;
     }
     MEMCACHED_ASSOC_FIND(key, nkey, depth);
+    // 返回找到的 item
     return ret;
 }
 
 /* returns the address of the item pointer before the key.  if *item == 0,
    the item wasn't found */
-
+// 找到前一个指针，用于移除 key 对应的 item，衔接上开链
 static item** _hashitem_before (const char *key, const size_t nkey, const uint32_t hv) {
     item **pos;
     unsigned int oldbucket;
@@ -122,6 +131,7 @@ static item** _hashitem_before (const char *key, const size_t nkey, const uint32
 }
 
 /* grows the hashtable to the next power of 2. */
+// 倍增扩展桶个数
 static void assoc_expand(void) {
     old_hashtable = primary_hashtable;
 
@@ -152,9 +162,11 @@ static void assoc_start_expand(void) {
 }
 
 /* Note: this isn't an assoc_update.  The key must not already exist to call this */
+// 插入
 int assoc_insert(item *it, const uint32_t hv) {
     unsigned int oldbucket;
 
+    // key 必须不在散列表中
 //    assert(assoc_find(ITEM_key(it), it->nkey) == 0);  /* shouldn't have duplicately named things defined */
 
     if (expanding &&
@@ -163,11 +175,14 @@ int assoc_insert(item *it, const uint32_t hv) {
         it->h_next = old_hashtable[oldbucket];
         old_hashtable[oldbucket] = it;
     } else {
+        // 头插法插入
         it->h_next = primary_hashtable[hv & hashmask(hashpower)];
         primary_hashtable[hv & hashmask(hashpower)] = it;
     }
 
+    // 个数加 1
     hash_items++;
+    // 判断因子是否达到 1.5，需要 rehash
     if (! expanding && hash_items > (hashsize(hashpower) * 3) / 2) {
         assoc_start_expand();
     }
@@ -176,16 +191,20 @@ int assoc_insert(item *it, const uint32_t hv) {
     return 1;
 }
 
+// 从散列表中删除 item
 void assoc_delete(const char *key, const size_t nkey, const uint32_t hv) {
+    // 找到前一个指针
     item **before = _hashitem_before(key, nkey, hv);
 
     if (*before) {
         item *nxt;
+        // 个数减 1
         hash_items--;
         /* The DTrace probe cannot be triggered as the last instruction
          * due to possible tail-optimization by the compiler
          */
         MEMCACHED_ASSOC_DELETE(key, nkey, hash_items);
+        // 移除并把前后节点衔接上
         nxt = (*before)->h_next;
         (*before)->h_next = 0;   /* probably pointless, but whatever. */
         *before = nxt;
@@ -197,6 +216,7 @@ void assoc_delete(const char *key, const size_t nkey, const uint32_t hv) {
 }
 
 
+// rehash 维护线程相关，暂不关心
 static volatile int do_run_maintenance_thread = 1;
 
 #define DEFAULT_HASH_BULK_MOVE 1
