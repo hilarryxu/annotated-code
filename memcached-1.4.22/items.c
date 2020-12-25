@@ -32,6 +32,7 @@ typedef struct {
     uint64_t lrutail_reflocked;
 } itemstats_t;
 
+// LRU 链
 static item *heads[LARGEST_ID];
 static item *tails[LARGEST_ID];
 static crawler crawlers[LARGEST_ID];
@@ -51,6 +52,7 @@ void item_stats_reset(void) {
 }
 
 
+// 获取下一个 CAS id
 /* Get the next CAS id for a new item. */
 uint64_t get_cas_id(void) {
     static uint64_t cas_id = 0;
@@ -80,6 +82,7 @@ uint64_t get_cas_id(void) {
  *
  * Returns the total size of the header.
  */
+// 生成 item 的头部并计算大小
 static size_t item_make_header(const uint8_t nkey, const int flags, const int nbytes,
                      char *suffix, uint8_t *nsuffix) {
     /* suffix is defined at 40 chars elsewhere.. */
@@ -88,23 +91,29 @@ static size_t item_make_header(const uint8_t nkey, const int flags, const int nb
 }
 
 /*@null@*/
+// 分配一个 item
+//   1. 从 LRU 链尾部找
+//   2. slabs_alloc 分配一个
 item *do_item_alloc(char *key, const size_t nkey, const int flags,
                     const rel_time_t exptime, const int nbytes,
                     const uint32_t cur_hv) {
     uint8_t nsuffix;
     item *it = NULL;
     char suffix[40];
+    // 计算 item 大小
     size_t ntotal = item_make_header(nkey + 1, flags, nbytes, suffix, &nsuffix);
     if (settings.use_cas) {
         ntotal += sizeof(uint64_t);
     }
 
+    // 找到最接近的 slabclass
     unsigned int id = slabs_clsid(ntotal);
     if (id == 0)
         return 0;
 
     mutex_lock(&cache_lock);
     /* do a quick check if we have any expired items in the tail.. */
+    // 最多检查 LRU 队尾 5 个条目是否过期可复用
     int tries = 5;
     /* Avoid hangs if a slab has nothing but refcounted stuff in it. */
     int tries_lrutail_reflocked = 1000;
@@ -114,25 +123,30 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
     void *hold_lock = NULL;
     rel_time_t oldest_live = settings.oldest_live;
 
+    // 从 LRU 队尾开始
     search = tails[id];
     /* We walk up *only* for locked items. Never searching for expired.
      * Waste of CPU for almost all deployments */
     for (; tries > 0 && search != NULL; tries--, search=next_it) {
         /* we might relink search mid-loop, so search->prev isn't reliable */
+        // 队尾向前找
         next_it = search->prev;
         if (search->nbytes == 0 && search->nkey == 0 && search->it_flags == 1) {
             /* We are a crawler, ignore it. */
             tries++;
             continue;
         }
+        // 就算 hashcode
         uint32_t hv = hash(ITEM_key(search), search->nkey);
         /* Attempt to hash item lock the "search" item. If locked, no
          * other callers can incr the refcount
          */
         /* Don't accidentally grab ourselves, or bail if we can't quicklock */
+        // 跳过自身，加锁 bucket
         if (hv == cur_hv || (hold_lock = item_trylock(hv)) == NULL)
             continue;
         /* Now see if the item is refcount locked */
+        // 增加引用计数
         if (refcount_incr(&search->refcount) != 2) {
             /* Avoid pathological case with ref'ed items in tail */
             do_item_update_nolock(search);
@@ -159,18 +173,24 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         }
 
         /* Expired or flushed */
+        // 过期或者超出存活设定值
         if ((search->exptime != 0 && search->exptime < current_time)
             || (search->time <= oldest_live && oldest_live <= current_time)) {
             itemstats[id].reclaimed++;
             if ((search->it_flags & ITEM_FETCHED) == 0) {
                 itemstats[id].expired_unfetched++;
             }
+            // 找到可复用的
             it = search;
+            // 调整 mem_requested 计数
             slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it), ntotal);
+            // 从散列表和 LRU 链中移除（加过锁了所以调用的非加锁版本）
             do_item_unlink_nolock(it, hv);
             /* Initialize the item block: */
+            // 标记为不属于任何 slabclass
             it->slabs_clsid = 0;
         } else if ((it = slabs_alloc(ntotal, id)) == NULL) {
+            // 尝试从 slab 中分配一个
             tried_alloc = 1;
             if (settings.evict_to_free == 0) {
                 itemstats[id].outofmemory++;
@@ -200,6 +220,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
             }
         }
 
+        // 减少引用计数
         refcount_decr(&search->refcount);
         /* If hash values were equal, we don't grab a second lock */
         if (hold_lock)
@@ -207,42 +228,55 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         break;
     }
 
+    // 上面流程没分配过就调用 slabs_alloc 分配一个 item
     if (!tried_alloc && (tries == 0 || search == NULL))
         it = slabs_alloc(ntotal, id);
 
     if (it == NULL) {
+        // 几种途径都失败了
         itemstats[id].outofmemory++;
         mutex_unlock(&cache_lock);
         return NULL;
     }
 
+    // 断言：
+    //   不属于任何 slabclass
+    //   不是 LRU 的对头
     assert(it->slabs_clsid == 0);
     assert(it != heads[id]);
 
     /* Item initialization can happen outside of the lock; the item's already
      * been removed from the slab LRU.
      */
+    // 引用计数置为 1
     it->refcount = 1;     /* the caller will have a reference */
     mutex_unlock(&cache_lock);
+    // 从 LRU 链中已移除，所以不用加锁保护
+    // 清除双端队列和散列表相关指针
     it->next = it->prev = it->h_next = 0;
+    // 设置所属 slabclass
     it->slabs_clsid = id;
 
     DEBUG_REFCNT(it, '*');
+    // 初始化标记
     it->it_flags = settings.use_cas ? ITEM_CAS : 0;
+    // 其他相关字段的初始化
     it->nkey = nkey;
     it->nbytes = nbytes;
     memcpy(ITEM_key(it), key, nkey);
     it->exptime = exptime;
     memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
     it->nsuffix = nsuffix;
+    // 返回 item
     return it;
 }
 
-// 释放 item
+// 释放 item，挂到 freelist 头部供复用
 void item_free(item *it) {
     // 计算 item 的大小
     size_t ntotal = ITEM_ntotal(it);
     unsigned int clsid;
+    // 已经从 LRU 链中移除
     assert((it->it_flags & ITEM_LINKED) == 0);
     // 不能为 LRU 的头指针
     assert(it != heads[it->slabs_clsid]);
@@ -264,6 +298,7 @@ void item_free(item *it) {
  * Returns true if an item will fit in the cache (its size does not exceed
  * the maximum for a cache entry.)
  */
+// 判断 item 的大小是否合法
 bool item_size_ok(const size_t nkey, const int flags, const int nbytes) {
     char prefix[40];
     uint8_t nsuffix;
@@ -277,6 +312,7 @@ bool item_size_ok(const size_t nkey, const int flags, const int nbytes) {
     return slabs_clsid(ntotal) != 0;
 }
 
+// 将 item 插入到 slabclass 的 LRU 链中
 static void item_link_q(item *it) { /* item is the new head */
     item **head, **tail;
     assert(it->slabs_clsid < LARGEST_ID);
@@ -284,13 +320,17 @@ static void item_link_q(item *it) { /* item is the new head */
 
     head = &heads[it->slabs_clsid];
     tail = &tails[it->slabs_clsid];
+    // 不能是 LRU 头部
     assert(it != *head);
+    // LRU 有数据或者为空
     assert((*head && *tail) || (*head == 0 && *tail == 0));
+    // 插入到 LRU 头部
     it->prev = 0;
     it->next = *head;
     if (it->next) it->next->prev = it;
     *head = it;
     if (*tail == 0) *tail = it;
+    // 计数加 1
     sizes[it->slabs_clsid]++;
     return;
 }
@@ -324,11 +364,14 @@ static void item_unlink_q(item *it) {
     return;
 }
 
+// 将 item 插入到散列表和 LRU 链中
 int do_item_link(item *it, const uint32_t hv) {
     MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);
+    // 断言不在 LRU 链中
     assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);
     mutex_lock(&cache_lock);
     it->it_flags |= ITEM_LINKED;
+    // 记录时间
     it->time = current_time;
 
     STATS_LOCK();
@@ -338,16 +381,20 @@ int do_item_link(item *it, const uint32_t hv) {
     STATS_UNLOCK();
 
     /* Allocate a new CAS ID on link. */
+    // 设置 CAS id
     ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);
+    // 插入到散列表中
     assoc_insert(it, hv);
+    // 插入到 LRU 链中
     item_link_q(it);
+    // 增加引用计数
     refcount_incr(&it->refcount);
     mutex_unlock(&cache_lock);
 
     return 1;
 }
 
-// 从散列表的 LRU 链中移除
+// 从散列表和LRU 链中移除 item
 void do_item_unlink(item *it, const uint32_t hv) {
     MEMCACHED_ITEM_UNLINK(ITEM_key(it), it->nkey, it->nbytes);
     mutex_lock(&cache_lock);
@@ -412,6 +459,8 @@ void do_item_update_nolock(item *it) {
     }
 }
 
+// 更新存活时间并调整其在 LRU 链中的位置
+// 出于性能考虑设置了 ITEM_UPDATE_INTERVAL
 void do_item_update(item *it) {
     MEMCACHED_ITEM_UPDATE(ITEM_key(it), it->nkey, it->nbytes);
     if (it->time < current_time - ITEM_UPDATE_INTERVAL) {
@@ -427,6 +476,7 @@ void do_item_update(item *it) {
     }
 }
 
+// 替换操作（同时更新散列表和 LRU 链）
 int do_item_replace(item *it, item *new_it, const uint32_t hv) {
     MEMCACHED_ITEM_REPLACE(ITEM_key(it), it->nkey, it->nbytes,
                            ITEM_key(new_it), new_it->nkey, new_it->nbytes);
@@ -593,6 +643,7 @@ void do_item_stats_sizes(ADD_STAT add_stats, void *c) {
 }
 
 /** wrapper around assoc_find which does the lazy expiration logic */
+// 根据 key 查找 item，并检测过期情况
 item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     //mutex_lock(&cache_lock);
     // 在散列表中查找
@@ -658,6 +709,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
     return it;
 }
 
+// 修改过期时间
 item *do_item_touch(const char *key, size_t nkey, uint32_t exptime,
                     const uint32_t hv) {
     item *it = do_item_get(key, nkey, hv);
@@ -668,6 +720,7 @@ item *do_item_touch(const char *key, size_t nkey, uint32_t exptime,
 }
 
 /* expires items that are more recent than the oldest_live setting. */
+// 遍历回收太旧的数据
 void do_item_flush_expired(void) {
     int i;
     item *iter, *next;
