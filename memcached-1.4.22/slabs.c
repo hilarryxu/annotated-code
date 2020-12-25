@@ -331,7 +331,7 @@ static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     p = &slabclass[id];
 
     it = (item *)ptr;
-    // 标记为空闲
+    // 标记为在 slab 中，未分配出去
     it->it_flags |= ITEM_SLABBED;
     // 头插到空闲 item 列表
     it->prev = 0;
@@ -493,6 +493,7 @@ void slabs_stats(ADD_STAT add_stats, void *c) {
     pthread_mutex_unlock(&slabs_lock);
 }
 
+// 直接霸占旧的 item 需要调用该函数
 // 调整 p->requested
 void slabs_adjust_mem_requested(unsigned int id, size_t old, size_t ntotal)
 {

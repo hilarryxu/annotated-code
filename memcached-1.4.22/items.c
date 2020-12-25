@@ -92,8 +92,10 @@ static size_t item_make_header(const uint8_t nkey, const int flags, const int nb
 
 /*@null@*/
 // 分配一个 item
-//   1. 从 LRU 链尾部找
-//   2. slabs_alloc 分配一个
+//   不一定准确是队尾那个节点（中间可能会向前跳过一些不能处理的节点）
+//   1. 判断 LRU 队尾那个是否过期，过期就回收复用
+//   2. 调用 slabs_alloc 重新分配一个（优先从 freelist 中复用）
+//   3. 最后启用 LRU 淘汰机制，强制淘汰队尾那个 item
 item *do_item_alloc(char *key, const size_t nkey, const int flags,
                     const rel_time_t exptime, const int nbytes,
                     const uint32_t cur_hv) {
@@ -131,23 +133,27 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         /* we might relink search mid-loop, so search->prev isn't reliable */
         // 队尾向前找
         next_it = search->prev;
+        // 跳过 LRU 爬虫正在处理的节点
         if (search->nbytes == 0 && search->nkey == 0 && search->it_flags == 1) {
             /* We are a crawler, ignore it. */
             tries++;
             continue;
         }
-        // 就算 hashcode
+        // 计算 hashcode
         uint32_t hv = hash(ITEM_key(search), search->nkey);
         /* Attempt to hash item lock the "search" item. If locked, no
          * other callers can incr the refcount
          */
         /* Don't accidentally grab ourselves, or bail if we can't quicklock */
-        // 跳过自身，加锁 bucket
+        // 跳过自身
+        // 加锁 bucket 失败就跳过继续往前找（最多 tries 次）
         if (hv == cur_hv || (hold_lock = item_trylock(hv)) == NULL)
             continue;
         /* Now see if the item is refcount locked */
-        // 增加引用计数
+        // 增加引用计数，保证本次循环中 item 不会被回收
         if (refcount_incr(&search->refcount) != 2) {
+            // 工作线程死掉等特殊情况造成 item 的引用计数不正确
+            // 无法减为 0，一直释放不了，需要特殊处理
             /* Avoid pathological case with ref'ed items in tail */
             do_item_update_nolock(search);
             tries_lrutail_reflocked--;
@@ -160,6 +166,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
             if (settings.tail_repair_time &&
                     search->time + settings.tail_repair_time < current_time) {
                 itemstats[id].tailrepairs++;
+                // 处理方式就是将引用计数置为 1，并回收到 freelist
                 search->refcount = 1;
                 do_item_unlink_nolock(search, hv);
             }
@@ -190,11 +197,16 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
             // 标记为不属于任何 slabclass
             it->slabs_clsid = 0;
         } else if ((it = slabs_alloc(ntotal, id)) == NULL) {
-            // 尝试从 slab 中分配一个
+            // 队尾的那个 item 都没过期那整个 LRU 链肯定都没过期
+            // 就尝试从 slab 中分配一个
+            // 分配失败的话说明内存可能不够用了
+            // 就只能从 LRU 尾部淘汰最久未使用的 item 了（不再去判断是否过期）
             tried_alloc = 1;
             if (settings.evict_to_free == 0) {
+                // 配置没启用 LRU 淘汰机制就记录下并返回 NULL
                 itemstats[id].outofmemory++;
             } else {
+                // 更新 LRU 淘汰统计信息
                 itemstats[id].evicted++;
                 itemstats[id].evicted_time = current_time - search->time;
                 if (search->exptime != 0)
@@ -202,10 +214,12 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
                 if ((search->it_flags & ITEM_FETCHED) == 0) {
                     itemstats[id].evicted_unfetched++;
                 }
+                // 淘汰队尾的那个复用起来
                 it = search;
                 slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it), ntotal);
                 do_item_unlink_nolock(it, hv);
                 /* Initialize the item block: */
+                // 临时标记为不属于任何 slabclass，下面会初始化
                 it->slabs_clsid = 0;
 
                 /* If we've just evicted an item, and the automover is set to
@@ -223,8 +237,10 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
         // 减少引用计数
         refcount_decr(&search->refcount);
         /* If hash values were equal, we don't grab a second lock */
+        // 解锁之前的 bucket 锁
         if (hold_lock)
             item_trylock_unlock(hold_lock);
+        // 跳出循环
         break;
     }
 
@@ -241,7 +257,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
 
     // 断言：
     //   不属于任何 slabclass
-    //   不是 LRU 的对头
+    //   不是 LRU 的队头（正常要么是新分配要么已经从 LRU 链中移除了）
     assert(it->slabs_clsid == 0);
     assert(it != heads[id]);
 
@@ -251,6 +267,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
     // 引用计数置为 1
     it->refcount = 1;     /* the caller will have a reference */
     mutex_unlock(&cache_lock);
+    // 全新的一个 item 了，可以安全的初始化
     // 从 LRU 链中已移除，所以不用加锁保护
     // 清除双端队列和散列表相关指针
     it->next = it->prev = it->h_next = 0;
@@ -267,6 +284,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
     it->exptime = exptime;
     memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
     it->nsuffix = nsuffix;
+    // FIXME(xcc): 剩下的 time 字段什么时候设置？
     // 返回 item
     return it;
 }
@@ -316,6 +334,7 @@ bool item_size_ok(const size_t nkey, const int flags, const int nbytes) {
 static void item_link_q(item *it) { /* item is the new head */
     item **head, **tail;
     assert(it->slabs_clsid < LARGEST_ID);
+    // 断言 item 是已经从 slab 中分配出来了
     assert((it->it_flags & ITEM_SLABBED) == 0);
 
     head = &heads[it->slabs_clsid];
@@ -367,11 +386,12 @@ static void item_unlink_q(item *it) {
 // 将 item 插入到散列表和 LRU 链中
 int do_item_link(item *it, const uint32_t hv) {
     MEMCACHED_ITEM_LINK(ITEM_key(it), it->nkey, it->nbytes);
-    // 断言不在 LRU 链中
+    // 断言已经从 slab 分配出去，且不在 LRU 链中
     assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);
     mutex_lock(&cache_lock);
+    // 标记为在 LRU 队列中
     it->it_flags |= ITEM_LINKED;
-    // 记录时间
+    // 设置时间字段
     it->time = current_time;
 
     STATS_LOCK();
@@ -439,7 +459,7 @@ void do_item_remove(item *it) {
     assert(it->refcount > 0);
 
     if (refcount_decr(&it->refcount) == 0) {
-        // 引用计数为 0 时，释放 item
+        // 引用计数为 0 时，释放 item（实际是归还给 slab）
         item_free(it);
     }
 }
@@ -461,6 +481,8 @@ void do_item_update_nolock(item *it) {
 
 // 更新存活时间并调整其在 LRU 链中的位置
 // 出于性能考虑设置了 ITEM_UPDATE_INTERVAL
+// 排在队列前头的一些节点已经很新的，不会被淘汰也就
+// 不一定非要按照时间排好序插到队列头部去
 void do_item_update(item *it) {
     MEMCACHED_ITEM_UPDATE(ITEM_key(it), it->nkey, it->nbytes);
     if (it->time < current_time - ITEM_UPDATE_INTERVAL) {

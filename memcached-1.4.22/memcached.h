@@ -148,17 +148,29 @@ typedef void (*ADD_STAT)(const char *key, const uint16_t klen,
  * Possible states of a connection.
  */
 enum conn_states {
+    // 主线程等待连接到来
     conn_listening,  /**< the socket which listens for connections */
+    // 工作线程等待命令
     conn_new_cmd,    /**< Prepare connection for next command */
+    // 等待网络数据
     conn_waiting,    /**< waiting for a readable socket */
+    // 读取网络数据
     conn_read,       /**< reading in a command line */
+    // 解析命令
     conn_parse_cmd,  /**< try to parse a command from the input buffer */
+    // 发送简单的网络数据
     conn_write,      /**< writing out a simple response */
+    // 命令没读完不完整，继续读取
     conn_nread,      /**< reading in a fixed number of bytes */
+    // 文本协议不涉及该状态
     conn_swallow,    /**< swallowing unnecessary bytes w/o storing */
+    // 准备关闭连接
     conn_closing,    /**< closing this connection */
+    // 发送多个响应数据包
     conn_mwrite,     /**< writing out many items sequentially */
+    // 连接关闭
     conn_closed,     /**< connection is closed */
+    // 边界哨兵，超出表示出错
     conn_max_state   /**< Max state value (used for assertion) */
 };
 

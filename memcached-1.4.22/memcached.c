@@ -3001,7 +3001,11 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                 c->thread->stats.slab_stats[it->slabs_clsid].get_hits++;
                 c->thread->stats.get_cmds++;
                 pthread_mutex_unlock(&c->thread->stats.mutex);
+                // 刷新访问时间并调整其在 LRU 链中的位置
                 item_update(it);
+
+                // 继续引用这个 item，并记录到数组中
+                // 等响应发送完后统一减引用计数
                 *(c->ilist + i) = it;
                 i++;
 
@@ -4074,7 +4078,9 @@ static enum transmit_result transmit(conn *c) {
     }
 }
 
-// 连接事件处理状态机（重要）
+// 连接事件处理的有限状态机（重要）
+// 属于无 reactor 框架下手撸整个网络数据收发和业务处理
+// 掺和在一起导致代码看起来复杂，只需关注重点部分即可，无需深究
 static void drive_machine(conn *c) {
     bool stop = false;
     int sfd;
@@ -4091,6 +4097,7 @@ static void drive_machine(conn *c) {
 
     assert(c != NULL);
 
+    // 循环处理（因为会有状态转化）
     while (!stop) {
 
         switch(c->state) {
