@@ -21,11 +21,17 @@
 // 连接任务
 typedef struct conn_queue_item CQ_ITEM;
 struct conn_queue_item {
+    // socket fd
     int               sfd;
+    // 初始状态
     enum conn_states  init_state;
+    // 监视事件
     int               event_flags;
+    // 读缓冲区大小
     int               read_buffer_size;
+    // 传输方式
     enum network_transport     transport;
+    // 单向链表指针
     CQ_ITEM          *next;
 };
 
@@ -35,10 +41,12 @@ typedef struct conn_queue CQ;
 struct conn_queue {
     CQ_ITEM *head;
     CQ_ITEM *tail;
+    // 互斥锁，保证线程安全
     pthread_mutex_t lock;
 };
 
 /* Lock for cache operations (item_*, assoc_*) */
+// 全局锁
 pthread_mutex_t cache_lock;
 
 /* Connection lock around accepting new connections */
@@ -55,9 +63,12 @@ static pthread_mutex_t stats_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t worker_hang_lock;
 
 /* Free list of CQ_ITEM structs */
+// CQ_ITEM 的 freelist
 static CQ_ITEM *cqi_freelist;
+// 保护 cqi_freelist
 static pthread_mutex_t cqi_freelist_lock;
 
+// 散列表的一个桶一把锁，减少锁争用（但锁太多了，占用资源情况？）
 static pthread_mutex_t *item_locks;
 /* size of the item lock hash table */
 static uint32_t item_lock_count;
@@ -78,6 +89,7 @@ static LIBEVENT_THREAD *threads;
 /*
  * Number of worker threads that have finished setting themselves up.
  */
+// 起跑器，主线程等待所有子线程都启动完毕
 static int init_count = 0;
 static pthread_mutex_t init_lock;
 static pthread_cond_t init_cond;
@@ -85,6 +97,7 @@ static pthread_cond_t init_cond;
 
 static void thread_libevent_process(int fd, short which, void *arg);
 
+// 引用计数操作，优选 atomic 方式
 unsigned short refcount_incr(unsigned short *refcount) {
 #ifdef HAVE_GCC_ATOMICS
     return __sync_add_and_fetch(refcount, 1);
@@ -115,6 +128,7 @@ unsigned short refcount_decr(unsigned short *refcount) {
 #endif
 }
 
+// 多单个桶加锁
 void item_lock(uint32_t hv) {
     mutex_lock(&item_locks[hv & hashmask(item_lock_hashpower)]);
 }
@@ -138,6 +152,7 @@ void item_trylock_unlock(void *lock) {
     mutex_unlock((pthread_mutex_t *) lock);
 }
 
+// 多单个桶解锁
 void item_unlock(uint32_t hv) {
     mutex_unlock(&item_locks[hv & hashmask(item_lock_hashpower)]);
 }
@@ -260,8 +275,10 @@ static void cq_push(CQ *cq, CQ_ITEM *item) {
 /*
  * Returns a fresh connection queue item.
  */
+// 新建一个 CQ_ITEM
 static CQ_ITEM *cqi_new(void) {
     CQ_ITEM *item = NULL;
+    // 试着从 freelist 中复用一个
     pthread_mutex_lock(&cqi_freelist_lock);
     if (cqi_freelist) {
         item = cqi_freelist;
@@ -272,6 +289,7 @@ static CQ_ITEM *cqi_new(void) {
     if (NULL == item) {
         int i;
 
+        // 一次分配多个，第一个返回给用户
         /* Allocate a bunch of items at once to reduce fragmentation */
         item = malloc(sizeof(CQ_ITEM) * ITEMS_PER_ALLOC);
         if (NULL == item) {
@@ -286,9 +304,11 @@ static CQ_ITEM *cqi_new(void) {
          * (which we'll return to the caller) for placement on
          * the freelist.
          */
+        // 剩下的链起来
         for (i = 2; i < ITEMS_PER_ALLOC; i++)
             item[i - 1].next = &item[i];
 
+        // 关联到 freelist 中去
         pthread_mutex_lock(&cqi_freelist_lock);
         item[ITEMS_PER_ALLOC - 1].next = cqi_freelist;
         cqi_freelist = &item[1];
@@ -508,6 +528,7 @@ void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
 /*
  * Returns true if this is the thread that listens for new TCP connections.
  */
+// 判断是否为 dispatcher_thread 线程
 int is_listen_thread() {
     return pthread_self() == dispatcher_thread.thread_id;
 }
@@ -517,6 +538,7 @@ int is_listen_thread() {
 /*
  * Allocates a new item.
  */
+// 分配一个 item
 item *item_alloc(char *key, size_t nkey, int flags, rel_time_t exptime, int nbytes) {
     item *it;
     /* do_item_alloc handles its own locks */
@@ -528,7 +550,7 @@ item *item_alloc(char *key, size_t nkey, int flags, rel_time_t exptime, int nbyt
  * Returns an item if it hasn't been marked as expired,
  * lazy-expiring as needed.
  */
-// GET 命令
+// get 命令
 item *item_get(const char *key, const size_t nkey) {
     item *it;
     uint32_t hv;
@@ -542,6 +564,7 @@ item *item_get(const char *key, const size_t nkey) {
     return it;
 }
 
+// 更新 item 存活时间
 item *item_touch(const char *key, size_t nkey, uint32_t exptime) {
     item *it;
     uint32_t hv;
@@ -555,6 +578,7 @@ item *item_touch(const char *key, size_t nkey, uint32_t exptime) {
 /*
  * Links an item into the LRU and hashtable.
  */
+// 将 item 放入散列表和 LRU 链中
 int item_link(item *item) {
     int ret;
     uint32_t hv;
@@ -570,6 +594,7 @@ int item_link(item *item) {
  * Decrements the reference count on an item and adds it to the freelist if
  * needed.
  */
+// 已移除的 item 执行释放操作（挂到 freelist 上去复用）
 void item_remove(item *item) {
     uint32_t hv;
     hv = hash(ITEM_key(item), item->nkey);
@@ -584,6 +609,7 @@ void item_remove(item *item) {
  * Unprotected by a mutex lock since the core server does not require
  * it to be thread-safe.
  */
+// 替换
 int item_replace(item *old_it, item *new_it, const uint32_t hv) {
     return do_item_replace(old_it, new_it, hv);
 }
@@ -591,6 +617,7 @@ int item_replace(item *old_it, item *new_it, const uint32_t hv) {
 /*
  * Unlinks an item from the LRU and hashtable.
  */
+// 从散列表和 LRU 链中移除
 void item_unlink(item *item) {
     uint32_t hv;
     hv = hash(ITEM_key(item), item->nkey);
@@ -602,6 +629,7 @@ void item_unlink(item *item) {
 /*
  * Moves an item to the back of the LRU queue.
  */
+// 刷新时间并重新放回 LRU 链
 void item_update(item *item) {
     uint32_t hv;
     hv = hash(ITEM_key(item), item->nkey);
@@ -645,6 +673,7 @@ enum store_item_type store_item(item *item, int comm, conn* c) {
 /*
  * Flushes expired items after a flush_all call
  */
+// 清除过期的 item
 void item_flush_expired() {
     mutex_lock(&cache_lock);
     do_item_flush_expired();
@@ -810,6 +839,7 @@ void slab_stats_aggregate(struct thread_stats *stats, struct slab_stats *out) {
  * nthreads  Number of worker event handler threads to spawn
  * main_base Event base for main thread
  */
+// 初始化主线程
 void memcached_thread_init(int nthreads, struct event_base *main_base) {
     int         i;
     int         power;
@@ -842,6 +872,7 @@ void memcached_thread_init(int nthreads, struct event_base *main_base) {
         exit(1);
     }
 
+    // FIXME(xcc): 锁个数和实际 bucket 数量不同？
     item_lock_count = hashsize(power);
     item_lock_hashpower = power;
 
