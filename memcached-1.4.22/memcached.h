@@ -395,7 +395,7 @@ typedef struct _stritem {
      * the little shuffle to save space when not using CAS. */
     // 数据存储部分
     union {
-        uint64_t cas;  // cas 版本变量值
+        uint64_t cas;  // cas 版本变量值，乐观锁的概念
         char end;
     } data[];
     /* if it_flags & ITEM_CAS we have 8 bytes CAS */

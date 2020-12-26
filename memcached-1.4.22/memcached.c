@@ -880,6 +880,7 @@ static void out_string(conn *c, const char *str) {
     c->wcurr = c->wbuf;
 
     conn_set_state(c, conn_write);
+    // 发送完响应后准备继续处理新的命令
     c->write_and_go = conn_new_cmd;
     return;
 }
@@ -907,6 +908,7 @@ static void out_of_memory(conn *c, char *ascii_error) {
  * we get here after reading the value in set/add/replace commands. The command
  * has been stored in c->cmd, and the item is ready in c->item.
  */
+// 根据 c->cmd 处理 set/add/replace
 static void complete_nread_ascii(conn *c) {
     assert(c != NULL);
 
@@ -921,6 +923,7 @@ static void complete_nread_ascii(conn *c) {
     if (strncmp(ITEM_data(it) + it->nbytes - 2, "\r\n", 2) != 0) {
         out_string(c, "CLIENT_ERROR bad data chunk");
     } else {
+      // 存储修改 item
       ret = store_item(it, comm, c);
 
 #ifdef ENABLE_DTRACE
@@ -953,6 +956,7 @@ static void complete_nread_ascii(conn *c) {
       }
 #endif
 
+      // 根据结果返回对应响应
       switch (ret) {
       case STORED:
           out_string(c, "STORED");
@@ -972,6 +976,7 @@ static void complete_nread_ascii(conn *c) {
 
     }
 
+    // 减少 c->item 引用
     item_remove(c->item);       /* release the c->item reference */
     c->item = 0;
 }
@@ -2315,9 +2320,10 @@ static void complete_nread(conn *c) {
  *
  * Returns the state of storage.
  */
-// 存储 item
+// 存储 item（重要）
 enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t hv) {
     char *key = ITEM_key(it);
+    // 旧的 item
     item *old_it = do_item_get(key, it->nkey, hv);
     enum store_item_type stored = NOT_STORED;
 
@@ -2332,9 +2338,13 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
     {
         /* replace only replaces an existing value; don't store */
     } else if (comm == NREAD_CAS) {
+        // 处理 CAS
+        // cas key flags exptime bytes unique_cas_token [noreply]
+        // value
         /* validate cas operation */
         if(old_it == NULL) {
             // LRU expired
+            // 没找到
             stored = NOT_FOUND;
             pthread_mutex_lock(&c->thread->stats.mutex);
             c->thread->stats.cas_misses++;
@@ -2348,9 +2358,12 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
             c->thread->stats.slab_stats[old_it->slabs_clsid].cas_hits++;
             pthread_mutex_unlock(&c->thread->stats.mutex);
 
+            // cas_id 匹配就执行 replace 操作
             item_replace(old_it, it, hv);
             stored = STORED;
         } else {
+            // 新旧 cas_id 不匹配
+            // 返回 EXISTS（在最后一次取值后另外一个用户也在更新该数据）
             pthread_mutex_lock(&c->thread->stats.mutex);
             c->thread->stats.slab_stats[old_it->slabs_clsid].cas_badval++;
             pthread_mutex_unlock(&c->thread->stats.mutex);
@@ -2371,6 +2384,7 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
             /*
              * Validate CAS
              */
+            // 核对 cas_id
             if (ITEM_get_cas(it) != 0) {
                 // CAS much be equal
                 if (ITEM_get_cas(it) != ITEM_get_cas(old_it)) {
@@ -2384,6 +2398,7 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
 
                 flags = (int) strtol(ITEM_suffix(old_it), (char **) NULL, 10);
 
+                // 分配一个新的 item
                 new_it = do_item_alloc(key, it->nkey, flags, old_it->exptime, it->nbytes + old_it->nbytes - 2 /* CRLF */, hv);
 
                 if (new_it == NULL) {
@@ -2396,6 +2411,7 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
 
                 /* copy data from it and old_it to new_it */
 
+                // 拷贝数据
                 if (comm == NREAD_APPEND) {
                     memcpy(ITEM_data(new_it), ITEM_data(old_it), old_it->nbytes);
                     memcpy(ITEM_data(new_it) + old_it->nbytes - 2 /* CRLF */, ITEM_data(it), it->nbytes);
@@ -2405,14 +2421,18 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
                     memcpy(ITEM_data(new_it) + it->nbytes - 2 /* CRLF */, ITEM_data(old_it), old_it->nbytes);
                 }
 
+                // 更新 it 变量，函数结尾要用到
                 it = new_it;
             }
         }
 
         if (stored == NOT_STORED) {
+            // NREAD_SET, NREAD_REPLACE
             if (old_it != NULL)
+                // 替换旧的 item
                 item_replace(old_it, it, hv);
             else
+                // 将新的 item 挂到散列表和 LRU 链中
                 do_item_link(it, hv);
 
             c->cas = ITEM_get_cas(it);
@@ -2421,11 +2441,14 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
         }
     }
 
+    // 操作完毕后引用计数减 1
+    // c->item 的引用计数会在 complete_nread_ascii 中处理
     if (old_it != NULL)
         do_item_remove(old_it);         /* release our reference */
     if (new_it != NULL)
         do_item_remove(new_it);
 
+    // 记住 cas_id
     if (stored == STORED) {
         c->cas = ITEM_get_cas(it);
     }
@@ -2937,7 +2960,7 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                  */
                 // 构造响应
 
-                // 暂时不关注 cas
+                // 是否需要返回 cas_id
                 if (return_cas)
                 {
                   MEMCACHED_COMMAND_GET(c->sfd, ITEM_key(it), it->nkey,
@@ -3074,6 +3097,12 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
     }
 }
 
+// NREAD_ADD
+// NREAD_SET
+// NREAD_REPLACE
+// NREAD_PREPEND
+// NREAD_APPEND
+// NREAD_CAS
 static void process_update_command(conn *c, token_t *tokens, const size_t ntokens, int comm, bool handle_cas) {
     char *key;
     size_t nkey;
@@ -3096,6 +3125,9 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     key = tokens[KEY_TOKEN].value;
     nkey = tokens[KEY_TOKEN].length;
 
+    //  0   1    2      3     4
+    // set key flags exptime vlen [noreply]
+    // value
     if (! (safe_strtoul(tokens[2].value, (uint32_t *)&flags)
            && safe_strtol(tokens[3].value, &exptime_int)
            && safe_strtol(tokens[4].value, (int32_t *)&vlen))) {
@@ -3109,30 +3141,36 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     /* Negative exptimes can underflow and end up immortal. realtime() will
        immediately expire values that are greater than REALTIME_MAXDELTA, but less
        than process_started, so lets aim for that. */
+    // 0 表示永不过期
     if (exptime < 0)
         exptime = REALTIME_MAXDELTA + 1;
 
     // does cas value exist?
     if (handle_cas) {
+        // 读取 req_cas_id
         if (!safe_strtoull(tokens[5].value, &req_cas_id)) {
             out_string(c, "CLIENT_ERROR bad command line format");
             return;
         }
     }
 
+    // 加上 \r\n
     vlen += 2;
     if (vlen < 0 || vlen - 2 < 0) {
         out_string(c, "CLIENT_ERROR bad command line format");
         return;
     }
 
+    // 记录统计信息
     if (settings.detail_enabled) {
         stats_prefix_record_set(key, nkey);
     }
 
+    // 分配 item
     it = item_alloc(key, nkey, flags, realtime(exptime), vlen);
 
-    if (it == 0) {
+    if (it == NULL) {
+        // 判断大小是否太大
         if (! item_size_ok(nkey, flags, vlen))
             out_string(c, "SERVER_ERROR object too large for cache");
         else
@@ -3153,12 +3191,17 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 
         return;
     }
+    // 设置 cas_id
     ITEM_set_cas(it, req_cas_id);
 
+    // 挂到 conn 上
     c->item = it;
     c->ritem = ITEM_data(it);
+    // 设置要读的 value 长度
     c->rlbytes = it->nbytes;
+    // 记录命令，等 value 部分读完再处理
     c->cmd = comm;
+    // 准备读取 value 部分
     conn_set_state(c, conn_nread);
 }
 
@@ -3209,6 +3252,7 @@ static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens
     }
 }
 
+// 执行算数计算
 static void process_arithmetic_command(conn *c, token_t *tokens, const size_t ntokens, const bool incr) {
     char temp[INCR_MAX_STORAGE_LEN];
     uint64_t delta;
@@ -3504,6 +3548,7 @@ static void process_command(conn *c, char *command) {
                 (strcmp(tokens[COMMAND_TOKEN].value, "prepend") == 0 && (comm = NREAD_PREPEND)) ||
                 (strcmp(tokens[COMMAND_TOKEN].value, "append") == 0 && (comm = NREAD_APPEND)) )) {
 
+        // 处理 set 类命令
         process_update_command(c, tokens, ntokens, comm, false);
 
     } else if ((ntokens == 7 || ntokens == 8) && (strcmp(tokens[COMMAND_TOKEN].value, "cas") == 0 && (comm = NREAD_CAS))) {
@@ -3516,6 +3561,7 @@ static void process_command(conn *c, char *command) {
 
     } else if (ntokens >= 3 && (strcmp(tokens[COMMAND_TOKEN].value, "gets") == 0)) {
 
+        // 处理批量 get 命令
         process_get_command(c, tokens, ntokens, true);
 
     } else if ((ntokens == 4 || ntokens == 5) && (strcmp(tokens[COMMAND_TOKEN].value, "decr") == 0)) {
@@ -3529,6 +3575,7 @@ static void process_command(conn *c, char *command) {
 
     } else if ((ntokens == 4 || ntokens == 5) && (strcmp(tokens[COMMAND_TOKEN].value, "touch") == 0)) {
 
+        // 处理 touch 命令
         process_touch_command(c, tokens, ntokens);
 
     } else if (ntokens >= 2 && (strcmp(tokens[COMMAND_TOKEN].value, "stats") == 0)) {
@@ -3573,12 +3620,14 @@ static void process_command(conn *c, char *command) {
             settings.oldest_live = realtime(exptime) - 1;
         else /* exptime == 0 */
             settings.oldest_live = current_time - 1;
+        // 更新 oldest_live 并遍历 LRU 链清除老旧 item
         item_flush_expired();
         out_string(c, "OK");
         return;
 
     } else if (ntokens == 2 && (strcmp(tokens[COMMAND_TOKEN].value, "version") == 0)) {
 
+        // 输出版本信息
         out_string(c, "VERSION " VERSION);
 
     } else if (ntokens == 2 && (strcmp(tokens[COMMAND_TOKEN].value, "quit") == 0)) {
@@ -3588,7 +3637,9 @@ static void process_command(conn *c, char *command) {
     } else if (ntokens == 2 && (strcmp(tokens[COMMAND_TOKEN].value, "shutdown") == 0)) {
 
         if (settings.shutdown_command) {
+            // 断开连接
             conn_set_state(c, conn_closing);
+            // 产生 SIGINT 信号
             raise(SIGINT);
         } else {
             out_string(c, "ERROR: shutdown not enabled");
@@ -5216,10 +5267,12 @@ int main (int argc, char **argv) {
         NULL
     };
 
+    // libevent 版本检测
     if (!sanitycheck()) {
         return EX_OSERR;
     }
 
+    // SIGINT, SIGTERM 信号处理
     /* handle SIGINT and SIGTERM */
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
@@ -5231,6 +5284,7 @@ int main (int argc, char **argv) {
     init_lru_crawler();
 
     /* set stderr non-buffering (for running under, say, daemontools) */
+    // 禁用 stderr 缓冲
     setbuf(stderr, NULL);
 
     /* process arguments */
