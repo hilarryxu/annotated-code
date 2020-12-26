@@ -38,7 +38,7 @@ unsigned int hashpower = HASHPOWER_DEFAULT;
 #define hashsize(n) ((ub4)1<<(n))
 #define hashmask(n) (hashsize(n)-1)
 
-// 分了主散列表和旧散列表，用于后台逐步 rehash 不影响现有操作
+// 分了主散列表和旧散列表，用于后台线程逐步 rehash 不影响现有操作
 /* Main hash table. This is where we look except during expansion. */
 static item** primary_hashtable = 0;
 
@@ -61,6 +61,7 @@ static bool started_expanding = false;
  * During expansion we migrate values with bucket granularity; this is how
  * far we've gotten so far. Ranges from 0 .. hashsize(hashpower - 1) - 1.
  */
+// 当前正在迁移的桶序号
 static unsigned int expand_bucket = 0;
 
 // 初始化散列表（分配桶）
@@ -68,7 +69,7 @@ void assoc_init(const int hashtable_init) {
     if (hashtable_init) {
         hashpower = hashtable_init;
     }
-    // 默认分配 65536 个桶
+    // 默认分配 2^16=65536 个桶
     primary_hashtable = calloc(hashsize(hashpower), sizeof(void *));
     if (! primary_hashtable) {
         fprintf(stderr, "Failed to init hashtable.\n");
@@ -80,6 +81,7 @@ void assoc_init(const int hashtable_init) {
     STATS_UNLOCK();
 }
 
+// 根据 key 查找 item
 item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
     item *it;
     unsigned int oldbucket;
@@ -111,7 +113,7 @@ item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
 
 /* returns the address of the item pointer before the key.  if *item == 0,
    the item wasn't found */
-// 找到前一个指针，用于移除 key 对应的 item，衔接上开链
+// 找到 item 的前驱节点，用于移除 key 对应的 item，衔接上开链
 static item** _hashitem_before (const char *key, const size_t nkey, const uint32_t hv) {
     item **pos;
     unsigned int oldbucket;
@@ -127,6 +129,7 @@ static item** _hashitem_before (const char *key, const size_t nkey, const uint32
     while (*pos && ((nkey != (*pos)->nkey) || memcmp(key, ITEM_key(*pos), nkey))) {
         pos = &(*pos)->h_next;
     }
+    // pos 为前驱节点的 h_next 指针的指针
     return pos;
 }
 
@@ -162,7 +165,7 @@ static void assoc_start_expand(void) {
 }
 
 /* Note: this isn't an assoc_update.  The key must not already exist to call this */
-// 插入
+// item 插入散列表
 int assoc_insert(item *it, const uint32_t hv) {
     unsigned int oldbucket;
 
@@ -193,7 +196,7 @@ int assoc_insert(item *it, const uint32_t hv) {
 
 // 从散列表中删除 item
 void assoc_delete(const char *key, const size_t nkey, const uint32_t hv) {
-    // 找到前一个指针
+    // 找到 item 的前驱节点
     item **before = _hashitem_before(key, nkey, hv);
 
     if (*before) {
@@ -205,8 +208,14 @@ void assoc_delete(const char *key, const size_t nkey, const uint32_t hv) {
          */
         MEMCACHED_ASSOC_DELETE(key, nkey, hash_items);
         // 移除并把前后节点衔接上
+        // before 是个二级指针
+        // (*before) 作为右值指向 item，可以操作 item 属性
+        // (*before) 作为左值用于设置前驱节点的 h_next
+        // nxt 对应 item 的下一个节点
         nxt = (*before)->h_next;
+        // 将 item 的 h_next 置为 NULL
         (*before)->h_next = 0;   /* probably pointless, but whatever. */
+        // 前驱节点的 h_next 赋值为 nxt
         *before = nxt;
         return;
     }
@@ -216,7 +225,7 @@ void assoc_delete(const char *key, const size_t nkey, const uint32_t hv) {
 }
 
 
-// rehash 维护线程相关，暂不关心
+// rehash 后台维护线程相关，暂不关心
 static volatile int do_run_maintenance_thread = 1;
 
 #define DEFAULT_HASH_BULK_MOVE 1

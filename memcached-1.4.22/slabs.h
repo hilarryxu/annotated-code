@@ -40,7 +40,7 @@ void *slabs_alloc(const size_t size, unsigned int id);
 void slabs_free(void *ptr, size_t size, unsigned int id);
 
 /** Adjust the stats for memory requested */
-// 调整已请求内存计数
+// 调整已请求内存计数（覆盖旧的 item 时需要用到）
 void slabs_adjust_mem_requested(unsigned int id, size_t old, size_t ntotal);
 
 // slab 统计信息相关
@@ -50,7 +50,7 @@ bool get_stats(const char *stat_type, int nkey, ADD_STAT add_stats, void *c);
 /** Fill buffer with stats */ /*@null@*/
 void slabs_stats(ADD_STAT add_stats, void *c);
 
-// slab 维护线程相关
+// slab 后台内存优化维护线程相关
 int start_slab_maintenance_thread(void);
 void stop_slab_maintenance_thread(void);
 

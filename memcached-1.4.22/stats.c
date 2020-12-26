@@ -36,6 +36,7 @@ static int num_prefixes = 0;
 static int total_prefix_size = 0;
 
 void stats_prefix_init() {
+    // 将桶数组内存初始化为 0
     memset(prefix_stats, 0, sizeof(prefix_stats));
 }
 
@@ -43,6 +44,7 @@ void stats_prefix_init() {
  * Cleans up all our previously collected stats. NOTE: the stats lock is
  * assumed to be held when this is called.
  */
+// 情况 stats 散列表
 void stats_prefix_clear() {
     int i;
 
@@ -64,6 +66,7 @@ void stats_prefix_clear() {
  * in the list.
  */
 /*@null@*/
+// 从散列表中 get_or_create 一个 PREFIX_STATS
 static PREFIX_STATS *stats_prefix_find(const char *key, const size_t nkey) {
     PREFIX_STATS *pfs;
     uint32_t hashval;
@@ -107,10 +110,13 @@ static PREFIX_STATS *stats_prefix_find(const char *key, const size_t nkey) {
     pfs->prefix[length] = '\0';      /* because strncpy() sucks */
     pfs->prefix_len = length;
 
+    // 头插法
     pfs->next = prefix_stats[hashval];
     prefix_stats[hashval] = pfs;
 
+    // 散列表元素个数加 1
     num_prefixes++;
+    // 总的 prefix 长度
     total_prefix_size += length;
 
     return pfs;
@@ -119,6 +125,7 @@ static PREFIX_STATS *stats_prefix_find(const char *key, const size_t nkey) {
 /*
  * Records a "get" of a key.
  */
+// 记录 get 命令
 void stats_prefix_record_get(const char *key, const size_t nkey, const bool is_hit) {
     PREFIX_STATS *pfs;
 
@@ -136,6 +143,7 @@ void stats_prefix_record_get(const char *key, const size_t nkey, const bool is_h
 /*
  * Records a "delete" of a key.
  */
+// 记录 delete 命令
 void stats_prefix_record_delete(const char *key, const size_t nkey) {
     PREFIX_STATS *pfs;
 
@@ -150,6 +158,7 @@ void stats_prefix_record_delete(const char *key, const size_t nkey) {
 /*
  * Records a "set" of a key.
  */
+// 记录 set 命令
 void stats_prefix_record_set(const char *key, const size_t nkey) {
     PREFIX_STATS *pfs;
 
@@ -165,6 +174,7 @@ void stats_prefix_record_set(const char *key, const size_t nkey) {
  * Returns stats in textual form suitable for writing to a client.
  */
 /*@null@*/
+// dump 整个统计信息散列表
 char *stats_prefix_dump(int *length) {
     const char *format = "PREFIX %s get %llu hit %llu set %llu del %llu\r\n";
     PREFIX_STATS *pfs;

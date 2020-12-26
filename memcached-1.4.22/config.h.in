@@ -1,14 +1,17 @@
 /* config.h.in.  Generated from configure.ac by autoheader.  */
 
 /* Set to nonzero if you want to include DTRACE */
+// DTRACE
 #undef ENABLE_DTRACE
 
 /* Set to nonzero if you want to include SASL */
+// SASL
 #undef ENABLE_SASL
 
 /* Set to nonzero if you want to enable a SASL pwdb */
 #undef ENABLE_SASL_PWDB
 
+// 大小端
 /* machine is bigendian */
 #undef ENDIAN_BIG
 
@@ -16,6 +19,7 @@
 #undef ENDIAN_LITTLE
 
 /* Define to 1 if support accept4 */
+// 新的 accept4
 #undef HAVE_ACCEPT4
 
 /* Define to 1 if you have the `clock_gettime' function. */
@@ -25,12 +29,15 @@
 #undef HAVE_DROP_PRIVILEGES
 
 /* GCC Atomics available */
+// gcc 原子操作函数
 #undef HAVE_GCC_ATOMICS
 
 /* Define to 1 if you have the `getpagesizes' function. */
+// getpagesizes
 #undef HAVE_GETPAGESIZES
 
 /* Have ntohll */
+// 64位的大小端转换函数
 #undef HAVE_HTONLL
 
 /* Define to 1 if you have the <inttypes.h> header file. */
@@ -91,6 +98,7 @@
 #undef HAVE__BOOL
 
 /* Machine need alignment */
+// 内存对齐相关
 #undef NEED_ALIGN
 
 /* Name of package */

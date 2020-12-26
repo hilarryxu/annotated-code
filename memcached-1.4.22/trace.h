@@ -1,6 +1,8 @@
 #ifndef TRACE_H
 #define TRACE_H
 
+// 没有 DTrace 就定义相应的空宏函数
+
 #ifdef ENABLE_DTRACE
 #include "memcached_dtrace.h"
 #else

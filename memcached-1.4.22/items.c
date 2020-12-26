@@ -284,7 +284,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags,
     it->exptime = exptime;
     memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
     it->nsuffix = nsuffix;
-    // FIXME(xcc): 剩下的 time 字段什么时候设置？
+    // 剩下的 time 字段 do_item_link 时设置
     // 返回 item
     return it;
 }
@@ -719,7 +719,7 @@ item *do_item_get(const char *key, const size_t nkey, const uint32_t hv) {
                 fprintf(stderr, " -nuked by expire");
             }
         } else {
-            // 标记为已经读取
+            // 标记为已经读取到
             it->it_flags |= ITEM_FETCHED;
             DEBUG_REFCNT(it, '+');
         }
@@ -769,6 +769,7 @@ void do_item_flush_expired(void) {
     }
 }
 
+// LRU 爬虫线程相关，暂不关心
 static void crawler_link_q(item *it) { /* item is the new tail */
     item **head, **tail;
     assert(it->slabs_clsid < LARGEST_ID);

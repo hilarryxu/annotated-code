@@ -282,7 +282,6 @@ static void *do_slabs_alloc(const size_t size, unsigned int id) {
 
     /* fail unless we have space at the end of a recently allocated page,
        we have something on our freelist, or we could allocate a new page */
-    // FIXME(xcc): 回收 LRU 链的逻辑暂时没看到
     // freelist 为空时，尝试分配新的 slab
     // 成功后 freelist 不为空就有进到了 else if 分支
     if (! (p->sl_curr != 0 || do_slabs_newslab(id) != 0)) {
