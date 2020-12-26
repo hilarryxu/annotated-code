@@ -24,6 +24,7 @@
 #include "sasl_defs.h"
 
 /** Maximum length of a key. */
+// key 最大长度
 #define KEY_MAX_LENGTH 250
 
 /** Size of an incr buf. */
@@ -61,6 +62,7 @@
 #define BIN_PKT_HDR_WORDS (MIN_BIN_PKT_LENGTH/sizeof(uint32_t))
 
 /* Initial power multiplier for the hash table */
+// 散列表桶的默认大小 2^16
 #define HASHPOWER_DEFAULT 16
 
 /*
@@ -68,6 +70,7 @@
  * in this many seconds. That saves us from churning on frequently-accessed
  * items.
  */
+// 60s 以内的 item 最近访问时间，不去更新它在 LRU 链中的位置
 #define ITEM_UPDATE_INTERVAL 60
 
 /* unistd.h is here */
@@ -78,6 +81,7 @@
 /* Slab sizing definitions. */
 #define POWER_SMALLEST 1
 #define POWER_LARGEST  200
+// chunk_size 对齐
 #define CHUNK_ALIGN_BYTES 8
 #define MAX_NUMBER_OF_SLAB_CLASSES (POWER_LARGEST + 1)
 
@@ -85,6 +89,7 @@
     harvesting it on a low memory condition. Default: disabled. */
 #define TAIL_REPAIR_TIME_DEFAULT 0
 
+// 读写 item 的 cas id
 /* warning: don't use these macros with a function, as it evals its arg twice */
 #define ITEM_get_cas(i) (((i)->it_flags & ITEM_CAS) ? \
         (i)->data->cas : (uint64_t)0)
@@ -190,8 +195,11 @@ enum bin_substates {
 };
 
 enum protocol {
+    // ASCII 协议
     ascii_prot = 3, /* arbitrary value. */
+    // 二进制协议
     binary_prot,
+    // 根据首个字节自动判断
     negotiating_prot /* Discovering the protocol */
 };
 
@@ -346,10 +354,13 @@ extern time_t process_started;
 extern struct settings settings;
 
 // item 的状态标记取值
+
+// 在 LRU 链中
 #define ITEM_LINKED 1
 #define ITEM_CAS 2
 
 /* temp */
+// 在 slab 中还未分配出去
 #define ITEM_SLABBED 4
 
 #define ITEM_FETCHED 8
@@ -443,7 +454,9 @@ struct conn {
     enum bin_substates substate;
     rel_time_t last_cmd_time;
     struct event event;
+    // events
     short  ev_flags;
+    // revents
     short  which;   /** which events were just triggered */
 
     char   *rbuf;   /** buffer to read commands into */
@@ -526,9 +539,11 @@ struct conn {
 };
 
 /* array of conn structures, indexed by file descriptor */
+// 全局的网络连接单向列表
 extern conn **conns;
 
 /* current time of day (updated periodically) */
+// 当前时间（有定时器会周期性更新该值）
 extern volatile rel_time_t current_time;
 
 /* TODO: Move to slabs.h? */

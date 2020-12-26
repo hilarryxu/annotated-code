@@ -15,6 +15,7 @@
 #include <atomic.h>
 #endif
 
+// 一次批量分配 64 个 CQ_ITEM
 #define ITEMS_PER_ALLOC 64
 
 /* An item in the connection queue. */
@@ -52,6 +53,7 @@ pthread_mutex_t cache_lock;
 /* Connection lock around accepting new connections */
 pthread_mutex_t conn_lock = PTHREAD_MUTEX_INITIALIZER;
 
+// 没有引用计数的平台用 mutex 代替
 #if !defined(HAVE_GCC_ATOMICS) && !defined(__sun)
 pthread_mutex_t atomics_mutex = PTHREAD_MUTEX_INITIALIZER;
 #endif
@@ -128,7 +130,7 @@ unsigned short refcount_decr(unsigned short *refcount) {
 #endif
 }
 
-// 多单个桶加锁
+// 对单个桶加锁，减少锁竞争
 void item_lock(uint32_t hv) {
     mutex_lock(&item_locks[hv & hashmask(item_lock_hashpower)]);
 }
@@ -152,7 +154,7 @@ void item_trylock_unlock(void *lock) {
     mutex_unlock((pthread_mutex_t *) lock);
 }
 
-// 多单个桶解锁
+// 对单个桶解锁
 void item_unlock(uint32_t hv) {
     mutex_unlock(&item_locks[hv & hashmask(item_lock_hashpower)]);
 }
@@ -178,6 +180,7 @@ static void register_thread_initialized(void) {
 /* Must not be called with any deeper locks held:
  * item locks, cache_lock, stats_lock, etc
  */
+// pasue、resume 线程
 void pause_threads(enum pause_thread_types type) {
     char buf[1];
     int i;
@@ -352,6 +355,7 @@ static void create_worker(void *(*func)(void *), void *arg) {
 /*
  * Sets whether or not we accept new connections.
  */
+// 控制是否接受客户端连接
 void accept_new_conns(const bool do_accept) {
     pthread_mutex_lock(&conn_lock);
     do_accept_new_conns(do_accept);
@@ -398,7 +402,7 @@ static void setup_thread(LIBEVENT_THREAD *me) {
         exit(EXIT_FAILURE);
     }
 
-    // cache 相关设置，暂时不关心
+    // suffix cache 相关设置，暂时不关心
     me->suffix_cache = cache_create("suffix", SUFFIX_SIZE, sizeof(char*),
                                     NULL, NULL);
     if (me->suffix_cache == NULL) {
@@ -642,6 +646,7 @@ void item_update(item *item) {
 /*
  * Does arithmetic on a numeric item value.
  */
+// 对整数 item 执行算数操作
 enum delta_result_type add_delta(conn *c, const char *key,
                                  const size_t nkey, int incr,
                                  const int64_t delta, char *buf,
@@ -659,6 +664,7 @@ enum delta_result_type add_delta(conn *c, const char *key,
 /*
  * Stores an item in the cache (high level, obeys set/add/replace semantics)
  */
+// 存储更新 item
 enum store_item_type store_item(item *item, int comm, conn* c) {
     enum store_item_type ret;
     uint32_t hv;
@@ -866,13 +872,16 @@ void memcached_thread_init(int nthreads, struct event_base *main_base) {
     }
 
     if (power >= hashpower) {
+        // bucket 锁个数超过了 bucket 个数，配置出错了要正确设置下
         fprintf(stderr, "Hash table power size (%d) cannot be equal to or less than item lock table (%d)\n", hashpower, power);
         fprintf(stderr, "Item lock table grows with `-t N` (worker threadcount)\n");
         fprintf(stderr, "Hash table grows with `-o hashpower=N` \n");
         exit(1);
     }
 
-    // FIXME(xcc): 锁个数和实际 bucket 数量不同？
+    // 最多 2^13=8192 个 bucket 锁
+    // bucket 个数 > bucket 锁个数时
+    // 就会出现多个 bucket 共用一把锁
     item_lock_count = hashsize(power);
     item_lock_hashpower = power;
 
