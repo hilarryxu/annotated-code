@@ -302,6 +302,7 @@ extern pthread_mutex_t conn_lock;
  * used for things other than connections, but that's worth it in exchange for
  * being able to directly index the conns array by FD.
  */
+// 初始化连接队列
 static void conn_init(void) {
     /* We're unlikely to see an FD much higher than maxconns. */
     int next_fd = dup(1);
@@ -499,6 +500,7 @@ conn *conn_new(const int sfd, enum conn_states init_state,
     return c;
 }
 
+// 释放连接上引用的 items
 static void conn_release_items(conn *c) {
     assert(c != NULL);
 
@@ -549,6 +551,7 @@ static void conn_cleanup(conn *c) {
 /*
  * Frees a connection.
  */
+// 释放连接结构 conn 占用的内存
 void conn_free(conn *c) {
     if (c) {
         assert(c != NULL);
@@ -574,19 +577,24 @@ void conn_free(conn *c) {
     }
 }
 
+// 关闭连接
 static void conn_close(conn *c) {
     assert(c != NULL);
 
     /* delete the event, the socket and the conn */
+    // 移除 ioloop 上的事件监听
     event_del(&c->event);
 
     if (settings.verbose > 1)
         fprintf(stderr, "<%d connection closed.\n", c->sfd);
 
+    // 清理操作
     conn_cleanup(c);
 
     MEMCACHED_CONN_RELEASE(c->sfd);
+    // 设置状态为 conn_closed
     conn_set_state(c, conn_closed);
+    // 关闭套接字
     close(c->sfd);
 
     pthread_mutex_lock(&conn_lock);
@@ -681,6 +689,7 @@ static const char *state_text(enum conn_states state) {
  * processing that needs to happen on certain state transitions can
  * happen here.
  */
+// 修改状态机的状态
 static void conn_set_state(conn *c, enum conn_states state) {
     assert(c != NULL);
     assert(state >= conn_listening && state < conn_max_state);
@@ -2306,6 +2315,7 @@ static void complete_nread(conn *c) {
  *
  * Returns the state of storage.
  */
+// 存储 item
 enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t hv) {
     char *key = ITEM_key(it);
     item *old_it = do_item_get(key, it->nkey, hv);
@@ -2432,6 +2442,7 @@ typedef struct token_s {
 #define SUBCOMMAND_TOKEN 1
 #define KEY_TOKEN 1
 
+// 单次最多解析出 8 个 token
 #define MAX_TOKENS 8
 
 /*
@@ -2451,6 +2462,7 @@ typedef struct token_s {
  *      command  = tokens[ix].value;
  *   }
  */
+// 分段解析命令
 static size_t tokenize_command(char *command, token_t *tokens, const size_t max_tokens) {
     char *s, *e;
     size_t ntokens = 0;
@@ -2508,6 +2520,7 @@ static void write_and_free(conn *c, char *buf, int bytes) {
     }
 }
 
+// 设置是否无需返回相应 c->noreply
 static inline bool set_noreply_maybe(conn *c, token_t *tokens, size_t ntokens)
 {
     int noreply_index = ntokens - 2;
@@ -3149,6 +3162,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     conn_set_state(c, conn_nread);
 }
 
+// 处理 touch 命令
 static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens) {
     char *key;
     size_t nkey;
@@ -3172,8 +3186,10 @@ static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens
         return;
     }
 
+    // 更新过期时间
     it = item_touch(key, nkey, realtime(exptime_int));
     if (it) {
+        // 更新最近访问时间
         item_update(it);
         pthread_mutex_lock(&c->thread->stats.mutex);
         c->thread->stats.touch_cmds++;
@@ -3181,6 +3197,7 @@ static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens
         pthread_mutex_unlock(&c->thread->stats.mutex);
 
         out_string(c, "TOUCHED");
+        // 操作完毕引用计数减 1，保持平衡
         item_remove(it);
     } else {
         pthread_mutex_lock(&c->thread->stats.mutex);
@@ -3350,6 +3367,7 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
     return OK;
 }
 
+// 处理 delete 命令
 static void process_delete_command(conn *c, token_t *tokens, const size_t ntokens) {
     char *key;
     size_t nkey;
@@ -3378,10 +3396,12 @@ static void process_delete_command(conn *c, token_t *tokens, const size_t ntoken
         return;
     }
 
+    // 统计 delete 操作计数
     if (settings.detail_enabled) {
         stats_prefix_record_delete(key, nkey);
     }
 
+    // 先找到 item
     it = item_get(key, nkey);
     if (it) {
         MEMCACHED_COMMAND_DELETE(c->sfd, ITEM_key(it), it->nkey);
@@ -3394,13 +3414,16 @@ static void process_delete_command(conn *c, token_t *tokens, const size_t ntoken
         // 1. 从 LRU 链中移除
         // 2. 引用计数减为 0 后将 item 头插到对应 slabclass 的 freelist 上
         item_unlink(it);
+        // 引用计数再减 1，删除回收该 item
         item_remove(it);      /* release our reference */
+        // 删除成功
         out_string(c, "DELETED");
     } else {
         pthread_mutex_lock(&c->thread->stats.mutex);
         c->thread->stats.delete_misses++;
         pthread_mutex_unlock(&c->thread->stats.mutex);
 
+        // 未找到
         out_string(c, "NOT_FOUND");
     }
 }
@@ -3501,6 +3524,7 @@ static void process_command(conn *c, char *command) {
 
     } else if (ntokens >= 3 && ntokens <= 5 && (strcmp(tokens[COMMAND_TOKEN].value, "delete") == 0)) {
 
+        // 处理 delete 命令
         process_delete_command(c, tokens, ntokens);
 
     } else if ((ntokens == 4 || ntokens == 5) && (strcmp(tokens[COMMAND_TOKEN].value, "touch") == 0)) {
@@ -3962,16 +3986,20 @@ static enum try_read_result try_read_network(conn *c) {
     return gotdata;
 }
 
+// 更新监听事件
 static bool update_event(conn *c, const int new_flags) {
     assert(c != NULL);
 
     struct event_base *base = c->event.ev_base;
+    // 未修改直接返回
     if (c->ev_flags == new_flags)
         return true;
+    // 先移除
     if (event_del(&c->event) == -1) return false;
     event_set(&c->event, c->sfd, new_flags, event_handler, (void *)c);
     event_base_set(base, &c->event);
     c->ev_flags = new_flags;
+    // 再添加
     if (event_add(&c->event, 0) == -1) return false;
     return true;
 }
@@ -4457,6 +4485,7 @@ void event_handler(const int fd, const short which, void *arg) {
     return;
 }
 
+// 新建一个 socket
 static int new_socket(struct addrinfo *ai) {
     int sfd;
     int flags;
@@ -4465,6 +4494,7 @@ static int new_socket(struct addrinfo *ai) {
         return -1;
     }
 
+    // 设置为非阻塞
     if ((flags = fcntl(sfd, F_GETFL, 0)) < 0 ||
         fcntl(sfd, F_SETFL, flags | O_NONBLOCK) < 0) {
         perror("setting O_NONBLOCK");
@@ -4846,8 +4876,10 @@ static void clock_handler(const int fd, const short which, void *arg) {
     }
 #endif
     {
+        // 刷新 current_time 的值
         struct timeval tv;
         gettimeofday(&tv, NULL);
+        // 距离进程启动的相对时间
         current_time = (rel_time_t) (tv.tv_sec - process_started);
     }
 }
@@ -5114,6 +5146,7 @@ static int enable_large_pages(void) {
  * Do basic sanity check of the runtime environment
  * @return true if no errors found, false if we can't use this env
  */
+// 检测 libevent 版本至少为 1.3
 static bool sanitycheck(void) {
     /* One of our biggest problems is old and bogus libevents */
     const char *ever = event_get_version();
@@ -5520,6 +5553,7 @@ int main (int argc, char **argv) {
         }
     }
 
+    // 设置 hash 函数
     if (hash_init(hash_type) != 0) {
         fprintf(stderr, "Failed to initialize hash_algorithm!\n");
         exit(EX_USAGE);
@@ -5552,6 +5586,7 @@ int main (int argc, char **argv) {
         settings.port = settings.udpport;
     }
 
+    // 调整 rlimit
     if (maxcore != 0) {
         struct rlimit rlim_new;
         /*
@@ -5618,6 +5653,7 @@ int main (int argc, char **argv) {
 
     /* daemonize if requested */
     /* if we want to ensure our ability to dump core, don't chdir to / */
+    // 是否后台运行
     if (do_daemonize) {
         if (sigignore(SIGHUP) == -1) {
             perror("Failed to ignore SIGHUP");
@@ -5646,6 +5682,7 @@ int main (int argc, char **argv) {
     main_base = event_init();
 
     /* initialize other stuff */
+    // 初始化 stat assoc conn slabs 等组件
     stats_init();
     assoc_init(settings.hashpower_init);
     conn_init();
@@ -5655,11 +5692,13 @@ int main (int argc, char **argv) {
      * ignore SIGPIPE signals; we can use errno == EPIPE if we
      * need that information
      */
+    // 网络编程需要忽略 SIGPIPE 信号
     if (sigignore(SIGPIPE) == -1) {
         perror("failed to ignore SIGPIPE; sigaction");
         exit(EX_OSERR);
     }
     /* start up worker threads if MT mode */
+    // 初始化工作线程组
     memcached_thread_init(settings.num_threads, main_base);
 
     if (start_assoc_maintenance_thread() == -1) {
@@ -5672,6 +5711,7 @@ int main (int argc, char **argv) {
     }
 
     /* initialise clock event */
+    // 定时器
     clock_handler(0, 0, 0);
 
     /* create unix mode sockets after dropping privileges */
@@ -5743,6 +5783,7 @@ int main (int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
+    // 保存 pid
     if (pid_file != NULL) {
         save_pid(pid_file);
     }
@@ -5751,10 +5792,12 @@ int main (int argc, char **argv) {
     drop_privileges();
 
     /* enter the event loop */
+    // 进入主循环
     if (event_base_loop(main_base, 0) != 0) {
         retval = EXIT_FAILURE;
     }
 
+    // 退出进程的清理操作
     stop_assoc_maintenance_thread();
 
     /* remove the PID file if we're a daemon */

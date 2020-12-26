@@ -539,7 +539,7 @@ struct conn {
 };
 
 /* array of conn structures, indexed by file descriptor */
-// 全局的网络连接单向列表
+// 全局的客户端连接指针数组，按 sfd 索引取值
 extern conn **conns;
 
 /* current time of day (updated periodically) */
