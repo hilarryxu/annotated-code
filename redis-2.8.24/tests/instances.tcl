@@ -4,7 +4,7 @@
 # instances.
 #
 # Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
-# This softare is released under the BSD License. See the COPYING file for
+# This software is released under the BSD License. See the COPYING file for
 # more information.
 
 package require Tcl 8.5
@@ -396,7 +396,7 @@ proc restart_instance {type id} {
 
     # Check that the instance is running
     if {[server_is_up 127.0.0.1 $port 100] == 0} {
-        abort_sentinel_test "Problems starting $type #$j: ping timeout"
+        abort_sentinel_test "Problems starting $type #$id: ping timeout"
     }
 
     # Connect with it with a fresh link

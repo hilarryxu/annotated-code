@@ -89,10 +89,12 @@ redisClient *createClient(int fd) {
     c->ctime = c->lastinteraction = server.unixtime;
     c->authenticated = 0;
     c->replstate = REDIS_REPL_NONE;
+    c->repl_put_online_on_ack = 0;
     c->reploff = 0;
     c->repl_ack_off = 0;
     c->repl_ack_time = 0;
     c->slave_listening_port = 0;
+    c->slave_capa = SLAVE_CAPA_NONE;
     c->reply = listCreate();
     c->reply_bytes = 0;
     c->obuf_soft_limit_reached_time = 0;
@@ -133,7 +135,7 @@ int prepareClientToWrite(redisClient *c) {
     if (c->fd <= 0) return REDIS_ERR; /* Fake client */
     if (c->bufpos == 0 && listLength(c->reply) == 0 &&
         (c->replstate == REDIS_REPL_NONE ||
-         c->replstate == REDIS_REPL_ONLINE) &&
+         c->replstate == REDIS_REPL_ONLINE) && !c->repl_put_online_on_ack &&
         aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
         sendReplyToClient, c) == AE_ERR) return REDIS_ERR;
     return REDIS_OK;
@@ -622,20 +624,6 @@ void disconnectSlaves(void) {
     }
 }
 
-/* This function is called when the slave lose the connection with the
- * master into an unexpected way. */
-void replicationHandleMasterDisconnection(void) {
-    server.master = NULL;
-    server.repl_state = REDIS_REPL_CONNECT;
-    server.repl_down_since = server.unixtime;
-    /* We lost connection with our master, force our slaves to resync
-     * with us as well to load the new data set.
-     *
-     * If server.masterhost is NULL the user called SLAVEOF NO ONE so
-     * slave resync is not needed. */
-    if (server.masterhost != NULL) disconnectSlaves();
-}
-
 void freeClient(redisClient *c) {
     listNode *ln;
 
@@ -661,12 +649,8 @@ void freeClient(redisClient *c) {
 
     /* Log link disconnection with slave */
     if ((c->flags & REDIS_SLAVE) && !(c->flags & REDIS_MONITOR)) {
-        char ip[REDIS_IP_STR_LEN];
-
-        if (anetPeerToString(c->fd,ip,sizeof(ip),NULL) != -1) {
-            redisLog(REDIS_WARNING,"Connection with slave %s:%d lost.",
-                ip, c->slave_listening_port);
-        }
+        redisLog(REDIS_WARNING,"Connection with slave %s lost.",
+            replicationGetSlaveName(c));
     }
 
     /* Free the query buffer */
@@ -716,8 +700,10 @@ void freeClient(redisClient *c) {
     /* Master/slave cleanup Case 1:
      * we lost the connection with a slave. */
     if (c->flags & REDIS_SLAVE) {
-        if (c->replstate == REDIS_REPL_SEND_BULK && c->repldbfd != -1)
-            close(c->repldbfd);
+        if (c->replstate == REDIS_REPL_SEND_BULK) {
+            if (c->repldbfd != -1) close(c->repldbfd);
+            if (c->replpreamble) sdsfree(c->replpreamble);
+        }
         list *l = (c->flags & REDIS_MONITOR) ? server.monitors : server.slaves;
         ln = listSearchKey(l,c);
         redisAssert(ln != NULL);
@@ -756,7 +742,7 @@ void freeClient(redisClient *c) {
  * a context where calling freeClient() is not possible, because the client
  * should be valid for the continuation of the flow of the program. */
 void freeClientAsync(redisClient *c) {
-    if (c->flags & REDIS_CLOSE_ASAP) return;
+    if (c->flags & REDIS_CLOSE_ASAP || c->flags & REDIS_LUA_CLIENT) return;
     c->flags |= REDIS_CLOSE_ASAP;
     listAddNodeTail(server.clients_to_close,c);
 }
@@ -823,6 +809,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
          *
          * However if we are over the maxmemory limit we ignore that and
          * just deliver as much data as it is possible to deliver. */
+        server.stat_net_output_bytes += totwritten;
         if (totwritten > REDIS_MAX_WRITE_PER_EVENT &&
             (server.maxmemory == 0 ||
              zmalloc_used_memory() < server.maxmemory)) break;
@@ -906,8 +893,10 @@ int processInlineBuffer(redisClient *c) {
     sdsrange(c->querybuf,querylen+2,-1);
 
     /* Setup argv array on client structure */
-    if (c->argv) zfree(c->argv);
-    c->argv = zmalloc(sizeof(robj*)*argc);
+    if (argc) {
+        if (c->argv) zfree(c->argv);
+        c->argv = zmalloc(sizeof(robj*)*argc);
+    }
 
     /* Create redis objects for all arguments. */
     for (c->argc = 0, j = 0; j < argc; j++) {
@@ -925,7 +914,7 @@ int processInlineBuffer(redisClient *c) {
 /* Helper function. Trims query buffer to make the function that processes
  * multi bulk requests idempotent. */
 static void setProtocolError(redisClient *c, int pos) {
-    if (server.verbosity >= REDIS_VERBOSE) {
+    if (server.verbosity <= REDIS_VERBOSE) {
         sds client = catClientInfoString(sdsempty(),c);
         redisLog(REDIS_VERBOSE,
             "Protocol error from client: %s", client);
@@ -1028,7 +1017,7 @@ int processMultibulkBuffer(redisClient *c) {
                 qblen = sdslen(c->querybuf);
                 /* Hint the sds library about the amount of bytes this string is
                  * going to contain. */
-                if (qblen < ll+2)
+                if (qblen < (size_t)ll+2)
                     c->querybuf = sdsMakeRoomFor(c->querybuf,ll+2-qblen);
             }
             c->bulklen = ll;
@@ -1156,6 +1145,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         sdsIncrLen(c->querybuf,nread);
         c->lastinteraction = server.unixtime;
         if (c->flags & REDIS_MASTER) c->reploff += nread;
+        server.stat_net_input_bytes += nread;
     } else {
         server.current_client = NULL;
         return;
@@ -1204,9 +1194,9 @@ void formatPeerId(char *peerid, size_t peerid_len, char *ip, int port) {
 }
 
 /* A Redis "Peer ID" is a colon separated ip:port pair.
- * For IPv4 it's in the form x.y.z.k:pork, example: "127.0.0.1:1234".
+ * For IPv4 it's in the form x.y.z.k:port, example: "127.0.0.1:1234".
  * For IPv6 addresses we use [] around the IP part, like in "[::1]:1234".
- * For Unix socekts we use path:0, like in "/tmp/redis:0".
+ * For Unix sockets we use path:0, like in "/tmp/redis:0".
  *
  * A Peer ID always fits inside a buffer of REDIS_PEER_ID_LEN bytes, including
  * the null term.
@@ -1233,7 +1223,7 @@ int genClientPeerId(redisClient *client, char *peerid, size_t peerid_len) {
 }
 
 /* This function returns the client peer id, by creating and caching it
- * if client->perrid is NULL, otherwise returning the cached value.
+ * if client->peerid is NULL, otherwise returning the cached value.
  * The Peer ID never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientPeerId(redisClient *c) {
@@ -1335,6 +1325,7 @@ void clientCommand(redisClient *c) {
         if (c->argc == 3) {
             /* Old style syntax: CLIENT KILL <addr> */
             addr = c->argv[2]->ptr;
+            skipme = 0; /* With the old form, you can kill yourself. */
         } else if (c->argc > 3) {
             int i = 2; /* Next option index. */
 
@@ -1382,7 +1373,9 @@ void clientCommand(redisClient *c) {
         while ((ln = listNext(&li)) != NULL) {
             client = listNodeValue(ln);
             if (addr && strcmp(getClientPeerId(client),addr) != 0) continue;
-            if (type != -1 && getClientType(client) != type) continue;
+            if (type != -1 &&
+                (client->flags & REDIS_MASTER ||
+                 getClientType(client) != type)) continue;
             if (id != 0 && client->id != id) continue;
             if (c == client && skipme) continue;
 
@@ -1458,7 +1451,7 @@ void rewriteClientCommandVector(redisClient *c, int argc, ...) {
     va_start(ap,argc);
     for (j = 0; j < argc; j++) {
         robj *a;
-        
+
         a = va_arg(ap, robj*);
         argv[j] = a;
         incrRefCount(a);
@@ -1480,7 +1473,7 @@ void rewriteClientCommandVector(redisClient *c, int argc, ...) {
  * The new val ref count is incremented, and the old decremented. */
 void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
     robj *oldval;
-   
+
     redisAssertWithInfo(c,NULL,i < c->argc);
     oldval = c->argv[i];
     c->argv[i] = newval;
@@ -1524,7 +1517,7 @@ unsigned long getClientOutputBufferMemoryUsage(redisClient *c) {
 int getClientType(redisClient *c) {
     if ((c->flags & REDIS_SLAVE) && !(c->flags & REDIS_MONITOR))
         return REDIS_CLIENT_TYPE_SLAVE;
-    if (dictSize(c->pubsub_channels) || listLength(c->pubsub_patterns))
+    if (c->flags & REDIS_PUBSUB)
         return REDIS_CLIENT_TYPE_PUBSUB;
     return REDIS_CLIENT_TYPE_NORMAL;
 }
@@ -1615,6 +1608,12 @@ void flushSlavesOutputBuffers(void) {
         redisClient *slave = listNodeValue(ln);
         int events;
 
+        /* Note that the following will not flush output buffers of slaves
+         * in STATE_ONLINE but having put_online_on_ack set to true: in this
+         * case the writable event is never installed, since the purpose
+         * of put_online_on_ack is to postpone the moment it is installed.
+         * This is what we want since slaves in this state should not receive
+         * writes before the first ACK. */
         events = aeGetFileEvents(server.el,slave->fd);
         if (events & AE_WRITABLE &&
             slave->replstate == REDIS_REPL_ONLINE &&

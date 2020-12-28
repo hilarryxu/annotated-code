@@ -51,12 +51,11 @@
  * <len> is the length of the following string (key or value).
  * <len> lengths are encoded in a single value or in a 5 bytes value.
  * If the first byte value (as an unsigned 8 bit value) is between 0 and
- * 252, it's a single-byte length. If it is 253 then a four bytes unsigned
+ * 253, it's a single-byte length. If it is 254 then a four bytes unsigned
  * integer follows (in the host byte ordering). A value of 255 is used to
- * signal the end of the hash. The special value 254 is used to mark
- * empty space that can be used to add new key/value pairs.
+ * signal the end of the hash.
  *
- * <free> is the number of free unused bytes after the string, resulting 
+ * <free> is the number of free unused bytes after the string, resulting
  * from modification of values associated to a key. For instance if "foo"
  * is set to "bar", and later "foo" will be set to "hi", it will have a
  * free byte to use if the value will enlarge again later, or even in
@@ -186,7 +185,7 @@ static unsigned int zipmapRawKeyLength(unsigned char *p) {
 static unsigned int zipmapRawValueLength(unsigned char *p) {
     unsigned int l = zipmapDecodeLength(p);
     unsigned int used;
-    
+
     used = zipmapEncodeLength(NULL,l);
     used += p[used] + 1 + l;
     return used;
@@ -214,7 +213,7 @@ unsigned char *zipmapSet(unsigned char *zm, unsigned char *key, unsigned int kle
     unsigned int freelen, reqlen = zipmapRequiredLength(klen,vlen);
     unsigned int empty, vempty;
     unsigned char *p;
-   
+
     freelen = reqlen;
     if (update) *update = 0;
     p = zipmapLookupRaw(zm,key,klen,&zmlen);

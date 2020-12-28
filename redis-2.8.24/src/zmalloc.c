@@ -67,7 +67,10 @@ void zlibc_free(void *ptr) {
 #define free(ptr) je_free(ptr)
 #endif
 
-#ifdef HAVE_ATOMIC
+#if defined(__ATOMIC_RELAXED)
+#define update_zmalloc_stat_add(__n) __atomic_add_fetch(&used_memory, (__n), __ATOMIC_RELAXED)
+#define update_zmalloc_stat_sub(__n) __atomic_sub_fetch(&used_memory, (__n), __ATOMIC_RELAXED)
+#elif defined(HAVE_ATOMIC)
 #define update_zmalloc_stat_add(__n) __sync_add_and_fetch(&used_memory, (__n))
 #define update_zmalloc_stat_sub(__n) __sync_sub_and_fetch(&used_memory, (__n))
 #else
@@ -219,8 +222,8 @@ size_t zmalloc_used_memory(void) {
     size_t um;
 
     if (zmalloc_thread_safe) {
-#ifdef HAVE_ATOMIC
-        um = __sync_add_and_fetch(&used_memory, 0);
+#if defined(__ATOMIC_RELAXED) || defined(HAVE_ATOMIC)
+        um = update_zmalloc_stat_add(0);
 #else
         pthread_mutex_lock(&used_memory_mutex);
         um = used_memory;
@@ -325,27 +328,39 @@ float zmalloc_get_fragmentation_ratio(size_t rss) {
     return (float)rss/zmalloc_used_memory();
 }
 
+/* Get the sum of the specified field (converted form kb to bytes) in
+ * /proc/self/smaps. The field must be specified with trailing ":" as it
+ * apperas in the smaps output.
+ *
+ * Example: zmalloc_get_smap_bytes_by_field("Rss:");
+ */
 #if defined(HAVE_PROC_SMAPS)
-size_t zmalloc_get_private_dirty(void) {
+size_t zmalloc_get_smap_bytes_by_field(char *field) {
     char line[1024];
-    size_t pd = 0;
+    size_t bytes = 0;
     FILE *fp = fopen("/proc/self/smaps","r");
+    int flen = strlen(field);
 
     if (!fp) return 0;
     while(fgets(line,sizeof(line),fp) != NULL) {
-        if (strncmp(line,"Private_Dirty:",14) == 0) {
+        if (strncmp(line,field,flen) == 0) {
             char *p = strchr(line,'k');
             if (p) {
                 *p = '\0';
-                pd += strtol(line+14,NULL,10) * 1024;
+                bytes += strtol(line+flen,NULL,10) * 1024;
             }
         }
     }
     fclose(fp);
-    return pd;
+    return bytes;
 }
 #else
-size_t zmalloc_get_private_dirty(void) {
+size_t zmalloc_get_smap_bytes_by_field(char *field) {
+    ((void) field);
     return 0;
 }
 #endif
+
+size_t zmalloc_get_private_dirty(void) {
+    return zmalloc_get_smap_bytes_by_field("Private_Dirty:");
+}

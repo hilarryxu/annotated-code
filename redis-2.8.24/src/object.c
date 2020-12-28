@@ -69,26 +69,44 @@ robj *createStringObjectFromLongLong(long long value) {
     return o;
 }
 
-/* Note: this function is defined into object.c since here it is where it
- * belongs but it is actually designed to be used just for INCRBYFLOAT */
-robj *createStringObjectFromLongDouble(long double value) {
+/* Create a string object from a long double. If humanfriendly is non-zero
+ * it does not use exponential format and trims trailing zeroes at the end,
+ * however this results in loss of precision. Otherwise exp format is used
+ * and the output of snprintf() is not modified.
+ *
+ * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
+robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
     char buf[256];
     int len;
 
-    /* We use 17 digits precision since with 128 bit floats that precision
-     * after rounding is able to represent most small decimal numbers in a way
-     * that is "non surprising" for the user (that is, most small decimal
-     * numbers will be represented in a way that when converted back into
-     * a string are exactly the same as what the user typed.) */
-    len = snprintf(buf,sizeof(buf),"%.17Lf", value);
-    /* Now remove trailing zeroes after the '.' */
-    if (strchr(buf,'.') != NULL) {
-        char *p = buf+len-1;
-        while(*p == '0') {
-            p--;
-            len--;
+    if (isinf(value)) {
+        /* Libc in odd systems (Hi Solaris!) will format infinite in a
+         * different way, so better to handle it in an explicit way. */
+        if (value > 0) {
+            memcpy(buf,"inf",3);
+            len = 3;
+        } else {
+            memcpy(buf,"-inf",4);
+            len = 4;
         }
-        if (*p == '.') len--;
+    } else if (humanfriendly) {
+        /* We use 17 digits precision since with 128 bit floats that precision
+         * after rounding is able to represent most small decimal numbers in a
+         * way that is "non surprising" for the user (that is, most small
+         * decimal numbers will be represented in a way that when converted
+         * back into a string are exactly the same as what the user typed.) */
+        len = snprintf(buf,sizeof(buf),"%.17Lf", value);
+        /* Now remove trailing zeroes after the '.' */
+        if (strchr(buf,'.') != NULL) {
+            char *p = buf+len-1;
+            while(*p == '0') {
+                p--;
+                len--;
+            }
+            if (*p == '.') len--;
+        }
+    } else {
+        len = snprintf(buf,sizeof(buf),"%.17Lg", value);
     }
     return createStringObject(buf,len);
 }
@@ -325,7 +343,11 @@ robj *tryObjectEncoding(robj *o) {
      * Note that we also avoid using shared integers when maxmemory is used
      * because every object needs to have a private LRU field for the LRU
      * algorithm to work well. */
-    if (server.maxmemory == 0 && value >= 0 && value < REDIS_SHARED_INTEGERS) {
+    if ((server.maxmemory == 0 ||
+         (server.maxmemory_policy != REDIS_MAXMEMORY_VOLATILE_LRU &&
+          server.maxmemory_policy != REDIS_MAXMEMORY_ALLKEYS_LRU)) &&
+        value >= 0 && value < REDIS_SHARED_INTEGERS)
+    {
         decrRefCount(o);
         incrRefCount(shared.integers[value]);
         return shared.integers[value];
@@ -608,7 +630,7 @@ robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {
 }
 
 /* Object command allows to inspect the internals of an Redis Object.
- * Usage: OBJECT <verb> ... arguments ... */
+ * Usage: OBJECT <refcount|encoding|idletime> <key> */
 void objectCommand(redisClient *c) {
     robj *o;
 

@@ -321,7 +321,7 @@ void smoveCommand(redisClient *c) {
 
     /* If srcset and dstset are equal, SMOVE is a no-op */
     if (srcset == dstset) {
-        addReply(c,shared.cone);
+        addReply(c,setTypeIsMember(srcset,ele) ? shared.cone : shared.czero);
         return;
     }
 
@@ -515,7 +515,7 @@ void srandmemberWithCountCommand(redisClient *c) {
             size--;
         }
     }
-    
+
     /* CASE 4: We have a big set compared to the requested number of elements.
      * In this case we can simply get random elements from the set and add
      * to the temporary set, trying to eventually get enough unique elements
