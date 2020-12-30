@@ -8,4 +8,7 @@ test -f release.h || touch release.h
 echo "#define REDIS_GIT_SHA1 \"$GIT_SHA1\"" > release.h
 echo "#define REDIS_GIT_DIRTY \"$GIT_DIRTY\"" >> release.h
 echo "#define REDIS_BUILD_ID \"$BUILD_ID\"" >> release.h
+# 刷新 release.c 修改时间
 touch release.c # Force recompile of release.c
+
+# 生成 release.h 头文件

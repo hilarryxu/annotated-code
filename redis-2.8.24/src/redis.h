@@ -50,11 +50,17 @@
 
 typedef long long mstime_t; /* millisecond time type. */
 
+// ioloop
 #include "ae.h"      /* Event driven programming library */
+// 字符串
 #include "sds.h"     /* Dynamic safe strings */
+// 散列表
 #include "dict.h"    /* Hash tables */
+// 双向链表
 #include "adlist.h"  /* Linked lists */
+// malloc
 #include "zmalloc.h" /* total memory usage aware version of malloc/free */
+// 网络相关函数
 #include "anet.h"    /* Networking the easy way */
 #include "ziplist.h" /* Compact list data structure */
 #include "intset.h"  /* Compact integer set structure */

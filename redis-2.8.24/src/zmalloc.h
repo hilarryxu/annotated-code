@@ -31,6 +31,10 @@
 #ifndef __ZMALLOC_H
 #define __ZMALLOC_H
 
+//=====================================================================
+// 定制内存分配函数，可以使用 jemalloc 等第三方库
+//=====================================================================
+
 /* Double expansion needed for stringification of macro values. */
 #define __xstr(s) __str(s)
 #define __str(s) #s

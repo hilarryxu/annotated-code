@@ -32,6 +32,10 @@
 
 #include "sds.h"
 
+//=====================================================================
+// 一些字符串操作、转换整数等辅助函数
+//=====================================================================
+
 int stringmatchlen(const char *p, int plen, const char *s, int slen, int nocase);
 int stringmatch(const char *p, const char *s, int nocase);
 long long memtoll(const char *p, int *err);

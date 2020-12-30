@@ -40,6 +40,10 @@
 
 #include <unistd.h> /* for _exit() */
 
+//=====================================================================
+// 定制 assert （打印日志、系统信息、错误堆栈等）
+//=====================================================================
+
 #define assert(_e) ((_e)?(void)0 : (_redisAssert(#_e,__FILE__,__LINE__),_exit(1)))
 
 void _redisAssert(char *estr, char *file, int line);
