@@ -27,21 +27,35 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+// 最多 32 个参数
 #define SLOWLOG_ENTRY_MAX_ARGC 32
+// 参数字符串最大长度
 #define SLOWLOG_ENTRY_MAX_STRING 128
 
 /* This structure defines an entry inside the slow log list */
+
+//---------------------------------------------------------------------
+// 用链表存储的慢查询记录
+//---------------------------------------------------------------------
 typedef struct slowlogEntry {
+    // 参数数组
     robj **argv;
+    // 参数个数
     int argc;
+    // 唯一标识 ID
     long long id;       /* Unique entry identifier. */
+    // 命令执行时长（纳秒）
     long long duration; /* Time spent by the query, in nanoseconds. */
+    // 命令在什么时候执行的
     time_t time;        /* Unix time at which the query was executed. */
 } slowlogEntry;
 
 /* Exported API */
+// 初始化慢查询记录系统
 void slowlogInit(void);
+// 如有需要加入到链表中去
 void slowlogPushEntryIfNeeded(robj **argv, int argc, long long duration);
 
 /* Exported commands */
+// 处理 SOWLOG 命令
 void slowlogCommand(redisClient *c);
