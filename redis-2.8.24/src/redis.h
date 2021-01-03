@@ -926,10 +926,18 @@ typedef struct {
 } listTypeEntry;
 
 /* Structure to hold set iteration abstraction. */
+
+//---------------------------------------------------------------------
+// 集合迭代器
+//---------------------------------------------------------------------
 typedef struct {
+    // 集合所指对象
     robj *subject;
+    // 对象编码方式
     int encoding;
+    // intset 的下标索引
     int ii; /* intset iterator */
+    // 字典迭代器
     dictIterator *di;
 } setTypeIterator;
 

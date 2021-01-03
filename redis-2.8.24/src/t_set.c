@@ -29,6 +29,10 @@
 
 #include "redis.h"
 
+//=====================================================================
+// SET 相关命令
+//=====================================================================
+
 /*-----------------------------------------------------------------------------
  * Set Commands
  *----------------------------------------------------------------------------*/
@@ -38,36 +42,54 @@ void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *
 /* Factory method to return a set that *can* hold "value". When the object has
  * an integer-encodable value, an intset will be returned. Otherwise a regular
  * hash table. */
+
+//---------------------------------------------------------------------
+// 创建一个 set 对象
+//---------------------------------------------------------------------
 robj *setTypeCreate(robj *value) {
+    // 这个值可以用 long long 表示，那么就采用 intset 存储
     if (isObjectRepresentableAsLongLong(value,NULL) == REDIS_OK)
         return createIntsetObject();
+    // 不行就用散列表存储
     return createSetObject();
 }
 
+
+//---------------------------------------------------------------------
+// 添加元素到集合
+//---------------------------------------------------------------------
 int setTypeAdd(robj *subject, robj *value) {
     long long llval;
     if (subject->encoding == REDIS_ENCODING_HT) {
+        // 添加到字典并增加 value 的引用计数
         if (dictAdd(subject->ptr,value,NULL) == DICT_OK) {
             incrRefCount(value);
             return 1;
         }
     } else if (subject->encoding == REDIS_ENCODING_INTSET) {
+        // value k可用 long long 表示
         if (isObjectRepresentableAsLongLong(value,&llval) == REDIS_OK) {
             uint8_t success = 0;
             subject->ptr = intsetAdd(subject->ptr,llval,&success);
             if (success) {
                 /* Convert to regular set when the intset contains
                  * too many entries. */
+                // 个数太多时需要转换成字典存储
                 if (intsetLen(subject->ptr) > server.set_max_intset_entries)
                     setTypeConvert(subject,REDIS_ENCODING_HT);
                 return 1;
             }
         } else {
             /* Failed to get integer from object, convert to regular set. */
+            // 不能用 long long 表示的值，那么必须转换成字典了
             setTypeConvert(subject,REDIS_ENCODING_HT);
 
             /* The set *was* an intset and this value is not integer
              * encodable, so dictAdd should always work. */
+            // 添加值到字典中
+            //
+            // 因为这个值不能用 long long 表示，所以也就不可能存在与
+            // 刚从 intset 转换成的字典中。
             redisAssertWithInfo(NULL,value,dictAdd(subject->ptr,value,NULL) == DICT_OK);
             incrRefCount(value);
             return 1;
@@ -75,17 +97,26 @@ int setTypeAdd(robj *subject, robj *value) {
     } else {
         redisPanic("Unknown set encoding");
     }
+    // 已存在集合中，返回 0
     return 0;
 }
 
+
+//---------------------------------------------------------------------
+// 从集合中删除元素
+//---------------------------------------------------------------------
 int setTypeRemove(robj *setobj, robj *value) {
     long long llval;
     if (setobj->encoding == REDIS_ENCODING_HT) {
+        // 从字典中删除
         if (dictDelete(setobj->ptr,value) == DICT_OK) {
+            // 删除成功后判断下是否需要收缩字典
             if (htNeedsResize(setobj->ptr)) dictResize(setobj->ptr);
             return 1;
         }
     } else if (setobj->encoding == REDIS_ENCODING_INTSET) {
+        // 判断是否可以编码为 long long
+        // 不能的话那肯定不在集合中
         if (isObjectRepresentableAsLongLong(value,&llval) == REDIS_OK) {
             int success;
             setobj->ptr = intsetRemove(setobj->ptr,llval,&success);
@@ -94,30 +125,44 @@ int setTypeRemove(robj *setobj, robj *value) {
     } else {
         redisPanic("Unknown set encoding");
     }
+    // 删除失败返回 0
     return 0;
 }
 
+
+//---------------------------------------------------------------------
+// 判断值是否在结合中
+//---------------------------------------------------------------------
 int setTypeIsMember(robj *subject, robj *value) {
     long long llval;
     if (subject->encoding == REDIS_ENCODING_HT) {
+        // 字典中查找节点
         return dictFind((dict*)subject->ptr,value) != NULL;
     } else if (subject->encoding == REDIS_ENCODING_INTSET) {
         if (isObjectRepresentableAsLongLong(value,&llval) == REDIS_OK) {
+            // intset 中查找
             return intsetFind((intset*)subject->ptr,llval);
         }
     } else {
         redisPanic("Unknown set encoding");
     }
+    // 没找到返回 0
     return 0;
 }
 
+
+//---------------------------------------------------------------------
+// 创建一个集合迭代器
+//---------------------------------------------------------------------
 setTypeIterator *setTypeInitIterator(robj *subject) {
     setTypeIterator *si = zmalloc(sizeof(setTypeIterator));
     si->subject = subject;
     si->encoding = subject->encoding;
     if (si->encoding == REDIS_ENCODING_HT) {
+        // 字典迭代器
         si->di = dictGetIterator(subject->ptr);
     } else if (si->encoding == REDIS_ENCODING_INTSET) {
+        // 从下标 0 开始
         si->ii = 0;
     } else {
         redisPanic("Unknown set encoding");
@@ -125,6 +170,10 @@ setTypeIterator *setTypeInitIterator(robj *subject) {
     return si;
 }
 
+
+//---------------------------------------------------------------------
+// 释放集合迭代器
+//---------------------------------------------------------------------
 void setTypeReleaseIterator(setTypeIterator *si) {
     if (si->encoding == REDIS_ENCODING_HT)
         dictReleaseIterator(si->di);
