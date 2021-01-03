@@ -31,30 +31,45 @@
 #ifndef __SDS_H
 #define __SDS_H
 
+
+//=====================================================================
+// 带长度的类 pascal 字符串
+//=====================================================================
+
 #define SDS_MAX_PREALLOC (1024*1024)
 
 #include <sys/types.h>
 #include <stdarg.h>
 
+// 可以当 char * 使用，但释放时要用 sdsfree
 typedef char *sds;
 
+// 实际的 sds 结构
+// 通常会在字符串结尾留一个 '\0'
+// 既不算在 len 中，也不算在 free 中
 struct sdshdr {
+    // 字符串长度（不包括结尾的 '\0'）
     unsigned int len;
+    // 剩余可用字节数
     unsigned int free;
+    // 存放数据的缓冲区
     char buf[];
 };
 
+// 返回字符串长度
 static inline size_t sdslen(const sds s) {
     struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
     return sh->len;
 }
 
+// 返回剩余空间长度
 static inline size_t sdsavail(const sds s) {
     struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
     return sh->free;
 }
 
 sds sdsnewlen(const void *init, size_t initlen);
+// NOTE(xcc): init == NULL 时会构造一个空串而不是 NULL
 sds sdsnew(const char *init);
 sds sdsempty(void);
 size_t sdslen(const sds s);

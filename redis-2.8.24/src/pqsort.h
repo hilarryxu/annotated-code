@@ -33,6 +33,10 @@
 #ifndef __PQSORT_H
 #define __PQSORT_H
 
+
+//---------------------------------------------------------------------
+// 支持 range 的 qsort
+//---------------------------------------------------------------------
 void
 pqsort(void *a, size_t n, size_t es,
     int (*cmp) (const void *, const void *), size_t lrange, size_t rrange);
