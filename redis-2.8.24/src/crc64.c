@@ -39,6 +39,7 @@
 
 #include <stdint.h>
 
+// uint64_t 数值要用 UINT64_C 宏括起来
 static const uint64_t crc64_tab[256] = {
     UINT64_C(0x0000000000000000), UINT64_C(0x7ad870c830358979),
     UINT64_C(0xf5b0e190606b12f2), UINT64_C(0x8f689158505e9b8b),
