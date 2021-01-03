@@ -38,46 +38,88 @@
 #ifndef __DICT_H
 #define __DICT_H
 
+
+//=====================================================================
+// 字典
+//
+// 2 个散列表，为了步进式的 rehash 过程
+//=====================================================================
+
 #define DICT_OK 0
 #define DICT_ERR 1
 
 /* Unused arguments generate annoying warnings... */
 #define DICT_NOTUSED(V) ((void) V)
 
+
+//---------------------------------------------------------------------
+// 散列表节点
+//---------------------------------------------------------------------
 typedef struct dictEntry {
+    // 键
     void *key;
+    // 值
     union {
         void *val;
         uint64_t u64;
         int64_t s64;
         double d;
     } v;
+    // 后继节点
     struct dictEntry *next;
 } dictEntry;
 
+
+//---------------------------------------------------------------------
+// 针对键值对的一组处理函数
+//---------------------------------------------------------------------
 typedef struct dictType {
+    // hash 函数
     unsigned int (*hashFunction)(const void *key);
+    // 复制键的函数
     void *(*keyDup)(void *privdata, const void *key);
+    // 复制值的函数
     void *(*valDup)(void *privdata, const void *obj);
+    // 比较两个键的函数
     int (*keyCompare)(void *privdata, const void *key1, const void *key2);
+    // 释放键的函数
     void (*keyDestructor)(void *privdata, void *key);
+    // 释放值的函数
     void (*valDestructor)(void *privdata, void *obj);
 } dictType;
 
 /* This is our hash table structure. Every dictionary has two of this as we
  * implement incremental rehashing, for the old to the new table. */
+
+//---------------------------------------------------------------------
+// 散列表
+//---------------------------------------------------------------------
 typedef struct dictht {
+    // 桶数组
     dictEntry **table;
+    // 桶大小
     unsigned long size;
+    // 散列掩码（& 位运算比取模高效）
     unsigned long sizemask;
+    // 节点数量
     unsigned long used;
 } dictht;
 
+
+//---------------------------------------------------------------------
+// 字典
+//---------------------------------------------------------------------
 typedef struct dict {
+    // 针对键值对的处理函数
     dictType *type;
+    // 用户自定义上下文
     void *privdata;
+    // 2 个散列表
     dictht ht[2];
+    // 当前 rehash 正在处理的桶序号
+    // -1 表示没有进行 rehash
     long rehashidx; /* rehashing not in progress if rehashidx == -1 */
+    // 当前正在运作的安全迭代器数量
     int iterators; /* number of iterators currently running */
 } dict;
 
@@ -85,10 +127,19 @@ typedef struct dict {
  * dictAdd, dictFind, and other functions against the dictionary even while
  * iterating. Otherwise it is a non safe iterator, and only dictNext()
  * should be called while iterating. */
+
+//---------------------------------------------------------------------
+// 字典迭代器
+//---------------------------------------------------------------------
 typedef struct dictIterator {
+    // 迭代的字典
     dict *d;
+    // 正在迭代的桶序号
     long index;
+    // table 正在迭代哪个散列表 0 或 1
+    // safe 是否为安全迭代器
     int table, safe;
+    // 当前节点以及后继节点
     dictEntry *entry, *nextEntry;
     /* unsafe iterator fingerprint for misuse detection. */
     long long fingerprint;
@@ -97,6 +148,7 @@ typedef struct dictIterator {
 typedef void (dictScanFunction)(void *privdata, const dictEntry *de);
 
 /* This is the initial size of every hash table */
+// 初始桶数量
 #define DICT_HT_INITIAL_SIZE     4
 
 /* ------------------------------- Macros ------------------------------------*/
@@ -142,8 +194,11 @@ typedef void (dictScanFunction)(void *privdata, const dictEntry *de);
 #define dictGetSignedIntegerVal(he) ((he)->v.s64)
 #define dictGetUnsignedIntegerVal(he) ((he)->v.u64)
 #define dictGetDoubleVal(he) ((he)->v.d)
+// 2 个散列表合起来的桶个数
 #define dictSlots(d) ((d)->ht[0].size+(d)->ht[1].size)
+// 2 个散列表合起来的节点个数
 #define dictSize(d) ((d)->ht[0].used+(d)->ht[1].used)
+// 是否正在 rehash
 #define dictIsRehashing(d) ((d)->rehashidx != -1)
 
 /* API */
