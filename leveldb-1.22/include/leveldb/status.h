@@ -21,6 +21,10 @@
 
 namespace leveldb {
 
+
+//---------------------------------------------------------------------
+// 函数返回状态码和错误消息封装
+//---------------------------------------------------------------------
 class LEVELDB_EXPORT Status {
  public:
   // Create a success status.
@@ -34,6 +38,7 @@ class LEVELDB_EXPORT Status {
   Status& operator=(Status&& rhs) noexcept;
 
   // Return a success status.
+  // 构造一个成功的状态对象
   static Status OK() { return Status(); }
 
   // Return error status of an appropriate type.
@@ -54,6 +59,7 @@ class LEVELDB_EXPORT Status {
   }
 
   // Returns true iff the status indicates success.
+  // 是否 ok
   bool ok() const { return (state_ == nullptr); }
 
   // Returns true iff the status indicates a NotFound error.
@@ -73,6 +79,7 @@ class LEVELDB_EXPORT Status {
 
   // Return a string representation of this status suitable for printing.
   // Returns the string "OK" for success.
+  // 字符串表示形式
   std::string ToString() const;
 
  private:
@@ -85,6 +92,7 @@ class LEVELDB_EXPORT Status {
     kIOError = 5
   };
 
+  // 状态码
   Code code() const {
     return (state_ == nullptr) ? kOk : static_cast<Code>(state_[4]);
   }
@@ -94,8 +102,11 @@ class LEVELDB_EXPORT Status {
 
   // OK status has a null state_.  Otherwise, state_ is a new[] array
   // of the following form:
+  //    消息长度
   //    state_[0..3] == length of message
+  //    状态码（1 个字节）
   //    state_[4]    == code
+  //    消息
   //    state_[5..]  == message
   const char* state_;
 };

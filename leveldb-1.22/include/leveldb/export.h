@@ -5,6 +5,10 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_EXPORT_H_
 #define STORAGE_LEVELDB_INCLUDE_EXPORT_H_
 
+
+//=====================================================================
+// 定义 LEVELDB_EXPORT
+//=====================================================================
 #if !defined(LEVELDB_EXPORT)
 
 #if defined(LEVELDB_SHARED_LIBRARY)

@@ -10,10 +10,16 @@
 
 namespace leveldb {
 
+
+//---------------------------------------------------------------------
+// 复制 state
+//---------------------------------------------------------------------
 const char* Status::CopyState(const char* state) {
+  // 读取消息长度
   uint32_t size;
   memcpy(&size, state, sizeof(size));
   char* result = new char[size + 5];
+  // 拷贝 state
   memcpy(result, state, size + 5);
   return result;
 }
