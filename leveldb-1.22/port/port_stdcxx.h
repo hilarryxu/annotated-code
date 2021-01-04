@@ -10,10 +10,12 @@
 // configuration detection.
 #if defined(LEVELDB_HAS_PORT_CONFIG_H)
 
+// 包含构建工具生成的特性配置头文件
 #if LEVELDB_HAS_PORT_CONFIG_H
 #include "port/port_config.h"
 #endif  // LEVELDB_HAS_PORT_CONFIG_H
 
+// c++17新特性
 #elif defined(__has_include)
 
 #if __has_include("port/port_config.h")
@@ -88,9 +90,12 @@ class CondVar {
 inline bool Snappy_Compress(const char* input, size_t length,
                             std::string* output) {
 #if HAVE_SNAPPY
+  // 预留 output 空间
   output->resize(snappy::MaxCompressedLength(length));
   size_t outlen;
+  // &(*output)[0]
   snappy::RawCompress(input, length, &(*output)[0], &outlen);
+  // 调整 output 长度为实际长度
   output->resize(outlen);
   return true;
 #else

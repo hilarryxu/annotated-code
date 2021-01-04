@@ -20,11 +20,16 @@ namespace port {
 
 // The following boolean constant must be true on a little-endian machine
 // and false otherwise.
+// 大小端定义
 static const bool kLittleEndian = true /* or some other expression */;
 
 // ------------------ Threading -------------------
 
 // A Mutex represents an exclusive lock.
+
+//---------------------------------------------------------------------
+// 互斥锁
+//---------------------------------------------------------------------
 class LOCKABLE Mutex {
  public:
   Mutex();
@@ -44,6 +49,10 @@ class LOCKABLE Mutex {
   void AssertHeld() ASSERT_EXCLUSIVE_LOCK();
 };
 
+
+//---------------------------------------------------------------------
+// 条件变量
+//---------------------------------------------------------------------
 class CondVar {
  public:
   explicit CondVar(Mutex* mu);
@@ -63,6 +72,11 @@ class CondVar {
 };
 
 // ------------------ Compression -------------------
+
+
+//---------------------------------------------------------------------
+// 压缩解压缩函数
+//---------------------------------------------------------------------
 
 // Store the snappy compression of "input[0,input_length-1]" in *output.
 // Returns false if snappy is not supported by this port.
