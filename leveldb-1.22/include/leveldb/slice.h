@@ -25,9 +25,14 @@
 
 namespace leveldb {
 
+
+//---------------------------------------------------------------------
+// 字符串视图 string_view
+//---------------------------------------------------------------------
 class LEVELDB_EXPORT Slice {
  public:
   // Create an empty slice.
+  // 空切片
   Slice() : data_(""), size_(0) {}
 
   // Create a slice that refers to d[0,n-1].
@@ -50,6 +55,7 @@ class LEVELDB_EXPORT Slice {
   size_t size() const { return size_; }
 
   // Return true iff the length of the referenced data is zero
+  // 判断是否为空切片
   bool empty() const { return size_ == 0; }
 
   // Return the ith byte in the referenced data.
@@ -60,12 +66,14 @@ class LEVELDB_EXPORT Slice {
   }
 
   // Change this slice to refer to an empty array
+  // 清空重置为空切片
   void clear() {
     data_ = "";
     size_ = 0;
   }
 
   // Drop the first "n" bytes from this slice.
+  // 移除前面 n 个字节（只是移动指针）
   void remove_prefix(size_t n) {
     assert(n <= size());
     data_ += n;
@@ -73,6 +81,7 @@ class LEVELDB_EXPORT Slice {
   }
 
   // Return a string that contains the copy of the referenced data.
+  // 转换为 std::string
   std::string ToString() const { return std::string(data_, size_); }
 
   // Three-way comparison.  Returns value:
@@ -82,12 +91,15 @@ class LEVELDB_EXPORT Slice {
   int compare(const Slice& b) const;
 
   // Return true iff "x" is a prefix of "*this"
+  // startswith
   bool starts_with(const Slice& x) const {
     return ((size_ >= x.size_) && (memcmp(data_, x.data_, x.size_) == 0));
   }
 
  private:
+  // 缓冲区指针
   const char* data_;
+  // 缓冲区长度
   size_t size_;
 };
 
@@ -98,6 +110,9 @@ inline bool operator==(const Slice& x, const Slice& y) {
 
 inline bool operator!=(const Slice& x, const Slice& y) { return !(x == y); }
 
+//---------------------------------------------------------------------
+// 比较操作
+//---------------------------------------------------------------------
 inline int Slice::compare(const Slice& b) const {
   const size_t min_len = (size_ < b.size_) ? size_ : b.size_;
   int r = memcmp(data_, b.data_, min_len);
