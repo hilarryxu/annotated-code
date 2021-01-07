@@ -116,6 +116,7 @@ static void client_reset(Client *client) {
     // 判断 keepalive
 	if (!client->keepalive) {
 		if (client->sock_watcher.fd != -1) {
+            // 移除监听器并关闭套接字
 			ev_io_stop(client->worker->loop, &client->sock_watcher);
 			shutdown(client->sock_watcher.fd, SHUT_WR);
 			close(client->sock_watcher.fd);
@@ -265,7 +266,7 @@ void client_state_machine(Client *client) {
 				if (r == -1) {
                     // 处理出错情况
 					/* error */
-                    // ?
+                    // EINTR 继续 write
 					if (errno == EINTR)
 						continue;
                     // 其他错误码表示失败 -> CLIENT_ERROR
@@ -286,7 +287,7 @@ void client_state_machine(Client *client) {
 						client_set_events(client, EV_READ);
 					}
 
-                    // 读到一部分数据就返回（等待下一次可读事件到来）
+                    // 发送一部分数据就返回（等待下次事件到来）
 					return;
 				} else {
 					/* disconnect */
@@ -296,53 +297,73 @@ void client_state_machine(Client *client) {
 					goto start;
 				}
 			}
+        // 读响应
 		case CLIENT_READING:
 			while (1) {
+                // 读响应
+                // buffer 结尾留了一个字节
 				r = read(client->sock_watcher.fd, &client->buffer[client->buffer_offset], sizeof(client->buffer) - client->buffer_offset - 1);
 				//printf("read(): %d, offset was: %d\n", r, client->buffer_offset);
 				if (r == -1) {
+                    // 处理出错情况
 					/* error */
+                    // EINTR 继续 read
 					if (errno == EINTR)
 						continue;
+                    // 其他错误码表示失败 -> CLIENT_ERROR
 					strerror_r(errno, client->buffer, sizeof(client->buffer));
 					W_ERROR("read() failed: %s (%d)", client->buffer, errno);
 					client->state = CLIENT_ERROR;
 				} else if (r != 0) {
 					/* success */
+                    // 更新 bytes_received 收到的数据
 					client->bytes_received += r;
+                    // 调整 buffer_offset 偏移量
 					client->buffer_offset += r;
+                    // 更新 worker 中的统计
 					client->worker->stats.bytes_total += r;
 
 					if (client->buffer_offset >= sizeof(client->buffer)) {
+                        // 响应包太大了 -> CLIENT_ERROR
 						/* too big response header */
 						client->state = CLIENT_ERROR;
 						break;
 					}
+                    // 没读一点数据就将结尾处设置为 '\0'
 					client->buffer[client->buffer_offset] = '\0';
 					//printf("buffer:\n==========\n%s\n==========\n", client->buffer);
 					if (!client_parse(client, r)) {
+                        // 解析失败 -> CLIENT_ERROR
+                        // 记录错误信息并准备关闭连接
 						client->state = CLIENT_ERROR;
 						//printf("parser failed\n");
 						break;
 					} else {
+                        // 响应正常读出处理完了 -> CLIENT_END
 						if (client->state == CLIENT_END)
 							goto start;
 						else
+                            // 函数返回（等待下一次可读事件到来）
 							return;
 					}
 				} else {
 					/* disconnect */
+                    // 服务端那边断开了连接
 					if (client->parser_state == PARSER_BODY && !client->keepalive && client->status_success
 						&& !client->chunked && client->content_length == -1) {
+                        // body 数据正常读取完了
+                        // -> CLIENT_END
 						client->success = 1;
 						client->state = CLIENT_END;
 					} else {
+                        // -> CLIENT_ERROR
 						client->state = CLIENT_ERROR;
 					}
 
 					goto start;
 				}
 			}
+            // 这里没有 break，会继续判断 state == CLIENT_ERROR
 
         // 出错了
 		case CLIENT_ERROR:
@@ -399,21 +420,44 @@ void client_state_machine(Client *client) {
 }
 
 
+
+//---------------------------------------------------------------------
+// 解析响应
+//
+// size 本次读到的数据大小
+//
+// 返回 1 表示解析正常，可能还需继续读取更多数据
+// 返回 0 表示失败
+//---------------------------------------------------------------------
 static uint8_t client_parse(Client *client, int size) {
 	char *end, *str;
 	uint16_t status_code;
 
+    // HTTP/1.1 200 OK
+    // Connection: keep-alive
+    // Content-Length: 3
+    // Content-Type: text/html; charset=UTF-8
+    // Date: Thu, 07 Jan 2021 02:54:52 GMT
+    // Etag: "671a3a6616f89e1656efeaef17173bb7aa82f87a"
+    // Server: TornadoServer/6.0.4
+    // 
+    // ABC
+
 	switch (client->parser_state) {
+        // 开始解析
 		case PARSER_START:
 			//printf("parse (START):\n%s\n", &client->buffer[client->parser_offset]);
 			/* look for HTTP/1.1 200 OK */
+            // 读到的数据不够，等待继续读
 			if (client->buffer_offset < sizeof("HTTP/1.1 200\r\n"))
 				return 1;
 
+            // 只支持 HTTP 1.1
 			if (strncmp(client->buffer, "HTTP/1.1 ", sizeof("HTTP/1.1 ")-1) != 0)
 				return 0;
 
 			// now the status code
+            // 解析 HTTP 状态码
 			status_code = 0;
 			str = client->buffer + sizeof("HTTP/1.1 ")-1;
 			for (end = str + 3; str != end; str++) {
@@ -425,10 +469,12 @@ static uint8_t client_parse(Client *client, int size) {
 			}
 
 			// look for next \r\n
+            // 查找 \r\n 且缓冲区大小不能超过 1024
 			end = memchr(end, '\r', client->buffer_offset);
 			if (!end || *(end+1) != '\n')
 				return (!end || *(end+1) == '\0') && client->buffer_offset < 1024 ? 1 : 0;
 
+            // 处理 HTTP 状态码
 			if (status_code >= 200 && status_code < 300) {
 				client->worker->stats.req_2xx++;
 				client->status_success = 1;
@@ -445,32 +491,46 @@ static uint8_t client_parse(Client *client, int size) {
 			}
 
 			client->parser_offset = end + 2 - client->buffer;
+            // -> PARSER_HEADER
+            // 继续解析 headers
 			client->parser_state = PARSER_HEADER;
+        // 解析 headers
 		case PARSER_HEADER:
 			//printf("parse (HEADER)\n");
 			/* look for Content-Length and Connection header */
+            // 循环查找 \r\n
 			while (NULL != (end = memchr(&client->buffer[client->parser_offset], '\r', client->buffer_offset - client->parser_offset))) {
 				if (*(end+1) != '\n')
 					return *(end+1) == '\0' && client->buffer_offset - client->parser_offset < 1024 ? 1 : 0;
 
+                // end <-> parser_offset
+                //     parser_offset
+                //     end
+                // \r\n\r\nBODY
 				if (end == &client->buffer[client->parser_offset]) {
 					/* body reached */
+                    // -> PARSER_BODY
 					client->parser_state = PARSER_BODY;
 					client->header_size = end + 2 - client->buffer;
 					//printf("body reached\n");
 
+                    // FIXME(xcc): size - client->header_size < 0
 					return client_parse(client, size - client->header_size);
 				}
 
+                // parser_offset                      end
+                // Date: Thu, 07 Jan 2021 02:54:52 GMT\0\n ...
 				*end = '\0';
 				str = &client->buffer[client->parser_offset];
 				//printf("checking header: '%s'\n", str);
 
 				if (strncasecmp(str, "Content-Length: ", sizeof("Content-Length: ")-1) == 0) {
 					/* content length header */
+                    // 解析 content_length
 					client->content_length = str_to_uint64(str + sizeof("Content-Length: ") - 1);
 				} else if (strncasecmp(str, "Connection: ", sizeof("Connection: ")-1) == 0) {
 					/* connection header */
+                    // 解析 keepalive
 					str += sizeof("Connection: ") - 1;
 
 					if (strncasecmp(str, "close", sizeof("close")-1) == 0)
@@ -481,35 +541,54 @@ static uint8_t client_parse(Client *client, int size) {
 						return 0;
 				} else if (strncasecmp(str, "Transfer-Encoding: ", sizeof("Transfer-Encoding: ")-1) == 0) {
 					/* transfer encoding header */
+                    // 解析 Transfer-Encoding
 					str += sizeof("Transfer-Encoding: ") - 1;
 
 					if (strncasecmp(str, "chunked", sizeof("chunked")-1) == 0)
 						client->chunked = 1;
 					else
+                        // 返回失败（仅支持 chunked）
 						return 0;
 				}
 
 
+                // end
+                // \r\n\r\nBODY
+                // FIXME(xcc): 会有访问越界问题吗？
 				if (*(end+2) == '\r' && *(end+3) == '\n') {
 					/* body reached */
+                    // -> PARSER_BODY
 					client->parser_state = PARSER_BODY;
+                    // 头部长度 ...\r\n\r\n
 					client->header_size = end + 4 - client->buffer;
+                    // 调整 parser_offset 偏移量
+                    //            parser_offset
+                    // ...\r\n\r\nBODY
 					client->parser_offset = client->header_size;
 					//printf("body reached\n");
 
+                    // 解析 body
+                    // 第二个参数为扣除头部当前缓冲区剩余字节数
 					return client_parse(client, size - client->header_size);
 				}
 
+                // 调整 parser_offset
+                //                                        parser_offset
+                // Date: Thu, 07 Jan 2021 02:54:52 GMT\r\n...
 				client->parser_offset = end - client->buffer + 2;
 			}
 
+            // 等待读取更多数据
 			return 1;
+        // 解析 body
 		case PARSER_BODY:
 			//printf("parse (BODY)\n");
 			/* do nothing, just consume the data */
 			/*printf("content-l: %"PRIu64", header: %d, recevied: %"PRIu64"\n",
 			client->content_length, client->header_size, client->bytes_received);*/
 
+            // chunked 编码方式的数据读取
+            // NOTE(xcc): 不关心暂时跳过
 			if (client->chunked) {
 				int consume_max;
 
@@ -600,21 +679,28 @@ static uint8_t client_parse(Client *client, int size) {
 
 				return 1;
 			} else {
+                // 普通方式，带 content_length 的
 				/* not chunked, just consume all data till content-length is reached */
 				client->buffer_offset = 0;
 
 				if (client->content_length == -1)
+                    // 头部没读到 content_length，解析失败
 					return 0;
 
 				if (client->bytes_received == (uint64_t) (client->header_size + client->content_length)) {
+                    // 判断是否读完了 body
 					/* full response received */
+                    // -> CLIENT_END
+                    // 响应读取完毕准备关闭连接
 					client->state = CLIENT_END;
 					client->success = client->status_success ? 1 : 0;
 				}
 			}
 
+            // 等待读取更多数据
 			return 1;
 	}
 
+    // 解析正常
 	return 1;
 }

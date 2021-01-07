@@ -74,6 +74,10 @@ static struct addrinfo *resolve_host(char *hostname, uint16_t port, uint8_t use_
 	return res;
 }
 
+
+//---------------------------------------------------------------------
+// 构造请求数据包
+//---------------------------------------------------------------------
 static char *forge_request(char *url, char keep_alive, char **host, uint16_t *port, char **headers, uint8_t headers_num) {
 	char *c, *end;
 	char *req;
@@ -94,6 +98,7 @@ static char *forge_request(char *url, char keep_alive, char **host, uint16_t *po
 		return NULL;
 	}
 
+    // 计算长度
 	len = strlen(url);
 
 	if ((c = strchr(url, ':'))) {
@@ -170,6 +175,7 @@ static char *forge_request(char *url, char keep_alive, char **host, uint16_t *po
 	if (!have_user_agent)
 		len += strlen("User-Agent: weighttp/" PACKAGE_VERSION "\r\n");
 
+    // 分配内存
 	req = W_MALLOC(char, len);
 
 	strcpy(req, "GET ");
@@ -185,9 +191,11 @@ static char *forge_request(char *url, char keep_alive, char **host, uint16_t *po
 
 	strcat(req, "\r\n");
 
+    // user_agent
 	if (!have_user_agent)
 		sprintf(req + strlen(req), "User-Agent: weighttp/" PACKAGE_VERSION "\r\n");
 
+    // headers
 	for (i = 0; i < headers_num; i++) {
 		if (strncmp(headers[i], "Host:", sizeof("Host:")-1) == 0)
 			continue;
@@ -195,11 +203,13 @@ static char *forge_request(char *url, char keep_alive, char **host, uint16_t *po
 		strcat(req, "\r\n");
 	}
 
+    // keep_alive
 	if (keep_alive)
 		strcat(req, "Connection: keep-alive\r\n\r\n");
 	else
 		strcat(req, "Connection: close\r\n\r\n");
 
+    // 返回构造好的请求数据包
 	return req;
 }
 
@@ -221,6 +231,10 @@ uint64_t str_to_uint64(char *str) {
 	return i;
 }
 
+
+//---------------------------------------------------------------------
+// 主函数
+//---------------------------------------------------------------------
 int main(int argc, char *argv[]) {
 	Worker **workers;
 	pthread_t *threads;
@@ -245,16 +259,19 @@ int main(int argc, char *argv[]) {
 
 	printf("weighttp " PACKAGE_VERSION " - a lightweight and simple webserver benchmarking tool\n\n");
 
+    // 请求头
 	headers = NULL;
 	headers_num = 0;
 
 	/* default settings */
+    // 默认配置
 	use_ipv6 = 0;
 	config.thread_count = 1;
 	config.concur_count = 1;
 	config.req_count = 0;
 	config.keep_alive = 0;
 
+    // 命令行参数处理
 	while ((opt = getopt(argc, argv, ":hv6kn:t:c:H:")) != -1) {
 		switch (opt) {
 			case 'h':
@@ -337,7 +354,7 @@ int main(int argc, char *argv[]) {
 	if (NULL == (config.request = forge_request(argv[optind], config.keep_alive, &host, &port, headers, headers_num))) {
 		return 1;
 	}
-
+    // 计算请求数据包大小
 	config.request_size = strlen(config.request);
 	//printf("Request (%d):\n==========\n%s==========\n", config.request_size, config.request);
 	//printf("host: '%s', port: %d\n", host, port);
@@ -358,6 +375,7 @@ int main(int argc, char *argv[]) {
 	printf("starting benchmark...\n");
 
 	memset(&stats, 0, sizeof(stats));
+    // 记录起始时间戳
 	ts_start = ev_time();
 
 	for (i = 0; i < config.thread_count; i++) {
@@ -417,6 +435,7 @@ int main(int argc, char *argv[]) {
 		worker_free(worker);
 	}
 
+    // 结束时间戳
 	ts_end = ev_time();
 	duration = ts_end - ts_start;
 	sec = duration;
@@ -427,6 +446,8 @@ int main(int argc, char *argv[]) {
 	microsec = duration * 1000;
 	rps = stats.req_done / (ts_end - ts_start);
 	kbps = stats.bytes_total / (ts_end - ts_start) / 1024;
+
+    // 打印结果信息
 	printf("\nfinished in %d sec, %d millisec and %d microsec, %"PRIu64" req/s, %"PRIu64" kbyte/s\n", sec, millisec, microsec, rps, kbps);
 	printf("requests: %"PRIu64" total, %"PRIu64" started, %"PRIu64" done, %"PRIu64" succeeded, %"PRIu64" failed, %"PRIu64" errored\n",
 		config.req_count, stats.req_started, stats.req_done, stats.req_success, stats.req_failed, stats.req_error
@@ -439,8 +460,10 @@ int main(int argc, char *argv[]) {
 	);
 
     // 释放 ioloop
+    // 其实这个 ioloop 没有实际作用
 	ev_default_destroy();
 
+    // 清理释放内存
 	free(threads);
 	free(workers);
 	free(config.request);

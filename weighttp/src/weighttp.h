@@ -51,14 +51,25 @@ typedef struct Client Client;
 #include "worker.h"
 
 
+
+//---------------------------------------------------------------------
+// 全局配置
+//---------------------------------------------------------------------
 struct Config {
+    // 请求总数
 	uint64_t req_count;
+    // 线程数（worker 个数）
 	uint8_t thread_count;
+    // 并发数（每个 worker 启动多少个 client）
 	uint16_t concur_count;
+    // 是否 keep_alive
 	uint8_t keep_alive;
 
+    // 请求数据包
 	char *request;
+    // 请求数据大小
 	uint32_t request_size;
+    // 待连接服务器地址信息
 	struct addrinfo *saddr;
 };
 

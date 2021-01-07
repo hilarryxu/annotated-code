@@ -51,6 +51,7 @@ struct Client {
 	uint16_t header_size;
 
     // 缓冲区 32KB
+    // 假定了响应数据包不会很大
 	char buffer[CLIENT_BUFFER_SIZE];
 };
 

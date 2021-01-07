@@ -22,7 +22,7 @@ Worker *worker_new(uint8_t id, Config *config, uint16_t num_clients, uint64_t nu
 	worker->id = id;
     // 每个 worker 线程拥有一个独立的 ioloop
 	worker->loop = ev_loop_new(0);
-    // ?
+    // 增加 ioloop 引用计数
 	ev_ref(worker->loop);
 	worker->config = config;
 	worker->num_clients = num_clients;
