@@ -5,3 +5,4 @@
 | 项目名称 | 开发语言 | 注释版 | 原地址 |
 | ------ | ------ | ------ | ------ |
 | pcrecpp | C/C++ | [注释版](https://github.com/hilarryxu/annotated-code/tree/master/pcrecpp)| [原地址](https://github.com/AndreLouisCaron/pcre) |
+| weighttp | C | [注释版](https://github.com/hilarryxu/annotated-code/tree/master/weighttp)| [原地址](https://github.com/lighttpd/weighttp) |
