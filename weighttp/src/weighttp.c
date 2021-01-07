@@ -25,6 +25,10 @@ static void show_help(void) {
 	printf("example: weighttpd -n 10000 -c 10 -t 2 -k -H \"User-Agent: foo\" localhost/index.html\n\n");
 }
 
+
+//---------------------------------------------------------------------
+// 解析域名
+//---------------------------------------------------------------------
 static struct addrinfo *resolve_host(char *hostname, uint16_t port, uint8_t use_ipv6) {
 	int err;
 	char port_str[6];
@@ -199,6 +203,10 @@ static char *forge_request(char *url, char keep_alive, char **host, uint16_t *po
 	return req;
 }
 
+
+//---------------------------------------------------------------------
+// 字符串转 uint64_t
+//---------------------------------------------------------------------
 uint64_t str_to_uint64(char *str) {
 	uint64_t i;
 
@@ -318,12 +326,14 @@ int main(int argc, char *argv[]) {
 	}
 
 
+    // 创建一个 ioloop
 	loop = ev_default_loop(0);
 	if (!loop) {
 		W_ERROR("%s", "could not initialize libev\n");
 		return 2;
 	}
 
+    // 构造 HTTP 请求字符串
 	if (NULL == (config.request = forge_request(argv[optind], config.keep_alive, &host, &port, headers, headers_num))) {
 		return 1;
 	}
@@ -333,6 +343,7 @@ int main(int argc, char *argv[]) {
 	//printf("host: '%s', port: %d\n", host, port);
 
 	/* resolve hostname */
+    // 解析域名
 	if(!(config.saddr = resolve_host(host, port, use_ipv6))) {
 		return 1;
 	}
@@ -350,6 +361,7 @@ int main(int argc, char *argv[]) {
 	ts_start = ev_time();
 
 	for (i = 0; i < config.thread_count; i++) {
+        // 计算 worker 线程分配到的并发数和总请求数
 		uint64_t reqs = config.req_count / config.thread_count;
 		uint16_t concur = config.concur_count / config.thread_count;
 
@@ -363,6 +375,7 @@ int main(int argc, char *argv[]) {
 			rest_req -= 1;
 		}
 		printf("spawning thread #%d: %"PRIu16" concurrent requests, %"PRIu64" total requests\n", i+1, concur, reqs);
+        // 初始化 worker 线程组
 		workers[i] = worker_new(i+1, &config, concur, reqs);
 
 		if (!(workers[i])) {
@@ -370,6 +383,7 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 
+        // 启动 woker 线程组
 		err = pthread_create(&threads[i], NULL, worker_thread, (void*)workers[i]);
 
 		if (err != 0) {
@@ -379,6 +393,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	for (i = 0; i < config.thread_count; i++) {
+        // 依次等待 worker 线程组完成
 		err = pthread_join(threads[i], NULL);
 		worker = workers[i];
 
@@ -387,6 +402,7 @@ int main(int argc, char *argv[]) {
 			return 3;
 		}
 
+        // 更新统计信息
 		stats.req_started += worker->stats.req_started;
 		stats.req_done += worker->stats.req_done;
 		stats.req_success += worker->stats.req_success;
@@ -422,6 +438,7 @@ int main(int argc, char *argv[]) {
 		stats.bytes_total,  stats.bytes_total - stats.bytes_body, stats.bytes_body
 	);
 
+    // 释放 ioloop
 	ev_default_destroy();
 
 	free(threads);

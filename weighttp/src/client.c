@@ -13,6 +13,7 @@
 static uint8_t client_parse(Client *client, int size);
 static void client_io_cb(struct ev_loop *loop, ev_io *w, int revents);
 static void client_set_events(Client *client, int events);
+
 /*
 static void client_add_events(Client *client, int events);
 static void client_rem_events(Client *client, int events);
@@ -42,30 +43,46 @@ static void client_rem_events(Client *client, int events) {
 }
 */
 
+
+//---------------------------------------------------------------------
+// 更新事件监听
+//---------------------------------------------------------------------
 static void client_set_events(Client *client, int events) {
 	struct ev_loop *loop = client->worker->loop;
 	ev_io *watcher = &client->sock_watcher;
 
+    // 没有变化就跳过
 	if (events == (watcher->events & (EV_READ | EV_WRITE)))
 		return;
 
+    // 先移除
 	ev_io_stop(loop, watcher);
+    // 设置新的 events 参数
 	ev_io_set(watcher, watcher->fd, (watcher->events & ~(EV_READ | EV_WRITE)) | events);
+    // 在添加
 	ev_io_start(loop, watcher);
 }
 
+
+//---------------------------------------------------------------------
+// 创建客户端
+//---------------------------------------------------------------------
 Client *client_new(Worker *worker) {
 	Client *client;
 
 	client = W_MALLOC(Client, 1);
+    // 初始状态位 CLIENT_START
 	client->state = CLIENT_START;
 	client->worker = worker;
 	client->sock_watcher.fd = -1;
 	client->sock_watcher.data = client;
+    // 响应 body 长度初始化为 -1
 	client->content_length = -1;
 	client->buffer_offset = 0;
 	client->request_offset = 0;
+    // 是否启用 KeepAlive
 	client->keepalive = client->worker->config->keep_alive;
+    // 是否为 chunked 编码方式
 	client->chunked = 0;
 	client->chunk_size = -1;
 	client->chunk_received = 0;
@@ -73,6 +90,10 @@ Client *client_new(Worker *worker) {
 	return client;
 }
 
+
+//---------------------------------------------------------------------
+// 释放客户端
+//---------------------------------------------------------------------
 void client_free(Client *client) {
 	if (client->sock_watcher.fd != -1) {
 		ev_io_stop(client->worker->loop, &client->sock_watcher);
@@ -83,8 +104,16 @@ void client_free(Client *client) {
 	free(client);
 }
 
+
+//---------------------------------------------------------------------
+// 重置客户端
+//
+// 关闭旧的套接字
+// 状态重置为 CLIENT_START
+//---------------------------------------------------------------------
 static void client_reset(Client *client) {
 	//printf("keep alive: %d\n", client->keepalive);
+    // 判断 keepalive
 	if (!client->keepalive) {
 		if (client->sock_watcher.fd != -1) {
 			ev_io_stop(client->worker->loop, &client->sock_watcher);
@@ -95,11 +124,13 @@ static void client_reset(Client *client) {
 
 		client->state = CLIENT_START;
 	} else {
+        // 继续监听可写事件，发送新的请求
 		client_set_events(client, EV_WRITE);
 		client->state = CLIENT_WRITING;
 		client->worker->stats.req_started++;
 	}
 
+    // 重置其他属性
 	client->parser_state = PARSER_START;
 	client->buffer_offset = 0;
 	client->parser_offset = 0;
@@ -117,6 +148,10 @@ static void client_reset(Client *client) {
 	client->chunk_received = 0;
 }
 
+
+//---------------------------------------------------------------------
+// 连接服务器
+//---------------------------------------------------------------------
 static uint8_t client_connect(Client *client) {
 	//printf("connecting...\n");
 	start:
@@ -126,14 +161,18 @@ static uint8_t client_connect(Client *client) {
 			case EINPROGRESS:
 			case EALREADY:
 				/* async connect now in progress */
+                // 正在连接 -> CLIENT_CONNECTING
 				client->state = CLIENT_CONNECTING;
 				return 1;
 			case EISCONN:
+                // 已连接
 				break;
 			case EINTR:
+                // 继续尝试连接
 				goto start;
 			default:
 			{
+                // 连接失败
 				strerror_r(errno, client->buffer, sizeof(client->buffer));
 				W_ERROR("connect() failed: %s (%d)", client->buffer, errno);
 				return 0;
@@ -142,19 +181,29 @@ static uint8_t client_connect(Client *client) {
 	}
 
 	/* successfully connected */
+    // 成功连接 -> CLIENT_WRITING
 	client->state = CLIENT_WRITING;
 	return 1;
 }
 
+
+//---------------------------------------------------------------------
+// 事件响应回调
+//---------------------------------------------------------------------
 static void client_io_cb(struct ev_loop *loop, ev_io *w, int revents) {
 	Client *client = w->data;
 
 	UNUSED(loop);
 	UNUSED(revents);
 
+    // 执行状态机
 	client_state_machine(client);
 }
 
+
+//---------------------------------------------------------------------
+// 状态机
+//---------------------------------------------------------------------
 void client_state_machine(Client *client) {
 	int r;
 	Config *config = client->worker->config;
@@ -162,13 +211,17 @@ void client_state_machine(Client *client) {
 	start:
 	//printf("state: %d\n", client->state);
 	switch (client->state) {
+        // 初始状态，发起连接
 		case CLIENT_START:
+            // 已启动请求数加 1
 			client->worker->stats.req_started++;
 
+            // 新建一个套接字
 			do {
 				r = socket(config->saddr->ai_family, config->saddr->ai_socktype, config->saddr->ai_protocol);
 			} while (-1 == r && errno == EINTR);
 
+            // 创建套接字失败 -> CLIENT_ERROR
 			if (-1 == r) {
 				client->state = CLIENT_ERROR;
 				strerror_r(errno, client->buffer, sizeof(client->buffer));
@@ -177,48 +230,68 @@ void client_state_machine(Client *client) {
 			}
 
 			/* set non-blocking */
+            // 设置为非阻塞
 			fcntl(r, F_SETFL, O_NONBLOCK | O_RDWR);
 
+            // 初始化事件监听器，并添加到 worker 对应的 ioloop 上
 			ev_init(&client->sock_watcher, client_io_cb);
+            // 监听可写事件（准备连接服务器）
 			ev_io_set(&client->sock_watcher, r, EV_WRITE);
 			ev_io_start(client->worker->loop, &client->sock_watcher);
 
+            // 开始连接服务器
 			if (!client_connect(client)) {
+                // 连接失败 -> CLIENT_ERROR
 				client->state = CLIENT_ERROR;
 				goto start;
 			} else {
+                // 监听可写事件（准备发送请求）
 				client_set_events(client, EV_WRITE);
+                // 连接成功，返回（等待可以发送请求）
 				return;
 			}
+        // 重连
 		case CLIENT_CONNECTING:
 			if (!client_connect(client)) {
 				client->state = CLIENT_ERROR;
 				goto start;
 			}
+        // 发送请求
 		case CLIENT_WRITING:
 			while (1) {
+                // 尝试发送剩余请求
 				r = write(client->sock_watcher.fd, &config->request[client->request_offset], config->request_size - client->request_offset);
 				//printf("write(%d - %d = %d): %d\n", config->request_size, client->request_offset, config->request_size - client->request_offset, r);
 				if (r == -1) {
+                    // 处理出错情况
 					/* error */
+                    // ?
 					if (errno == EINTR)
 						continue;
+                    // 其他错误码表示失败 -> CLIENT_ERROR
 					strerror_r(errno, client->buffer, sizeof(client->buffer));
 					W_ERROR("write() failed: %s (%d)", client->buffer, errno);
 					client->state = CLIENT_ERROR;
 					goto start;
 				} else if (r != 0) {
 					/* success */
+                    // 成功发送一部分数据
+                    // 调整 request_offset
 					client->request_offset += r;
+                    // 判断是否发送完了
 					if (client->request_offset == config->request_size) {
 						/* whole request was sent, start reading */
+                        // 开始监听可读事件，准备读响应 -> CLIENT_READING
 						client->state = CLIENT_READING;
 						client_set_events(client, EV_READ);
 					}
 
+                    // 读到一部分数据就返回（等待下一次可读事件到来）
 					return;
 				} else {
 					/* disconnect */
+                    // 服务端那边断开了连接 -> CLIENT_END
+                    // 准备关闭连接
 					client->state = CLIENT_END;
 					goto start;
 				}
@@ -271,24 +344,34 @@ void client_state_machine(Client *client) {
 				}
 			}
 
+        // 出错了
 		case CLIENT_ERROR:
 			//printf("client error\n");
+            // 请求失败计数器加 1
 			client->worker->stats.req_error++;
 			client->keepalive = 0;
+            // 标记客户端状态为失败
 			client->success = 0;
+            // -> CLIENT_END
 			client->state = CLIENT_END;
+            // 这里没有 break 会继续处理 CLIENT_END
+        // 准备结束本次连接
 		case CLIENT_END:
 			/* update worker stats */
+            // 请求完成数加 1
 			client->worker->stats.req_done++;
 
 			if (client->success) {
+                // 更新成功计数和读到的 body 字节数
 				client->worker->stats.req_success++;
 				client->worker->stats.bytes_body += client->bytes_received - client->header_size;
 			} else {
+                // 更新失败计数
 				client->worker->stats.req_failed++;
 			}
 
 			/* print progress every 10% done */
+            // 每完成 10% 打印一下当前进度
 			if (client->worker->id == 1 && client->worker->stats.req_done % client->worker->progress_interval == 0) {
 				printf("progress: %3d%% done\n",
 					(int) (client->worker->stats.req_done * 100 / client->worker->stats.req_todo)
@@ -296,15 +379,19 @@ void client_state_machine(Client *client) {
 			}
 
 			if (client->worker->stats.req_started == client->worker->stats.req_todo) {
+                // 全部请求已发送
 				/* this worker has started all requests */
 				client->keepalive = 0;
 				client_reset(client);
 
 				if (client->worker->stats.req_done == client->worker->stats.req_todo) {
 					/* this worker has finished all requests */
+                    // 全部请求已完成
+                    // worker 对应的 ioloop 引用计数减 1
 					ev_unref(client->worker->loop);
 				}
 			} else {
+                // 重置客户端并继续开始发送请求
 				client_reset(client);
 				goto start;
 			}

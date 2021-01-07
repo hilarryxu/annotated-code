@@ -8,6 +8,10 @@
  *     MIT, see COPYING file
  */
 
+
+//---------------------------------------------------------------------
+// 统计信息
+//---------------------------------------------------------------------
 struct Stats {
 	ev_tstamp req_ts_min;	/* minimum time taken for a request */
 	ev_tstamp req_ts_max;	/* maximum time taken for a request */
@@ -27,13 +31,23 @@ struct Stats {
 	uint64_t req_5xx;
 };
 
+
+//---------------------------------------------------------------------
+// worker 线程
+//---------------------------------------------------------------------
 struct Worker {
+    // ID 号，从 1 开始
 	uint8_t id;
+    // 全局配置
 	Config *config;
+    // ioloop
 	struct ev_loop *loop;
 	char *request;
+    // client 数组
 	Client **clients;
+    // client 个数
 	uint16_t num_clients;
+    // 统计信息
 	Stats stats;
 	uint64_t progress_interval;
 };
