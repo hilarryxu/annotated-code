@@ -50,18 +50,27 @@ int listMatchObjects(void *a, void *b) {
     return equalStringObjects(a,b);
 }
 
+
+//---------------------------------------------------------------------
+// 创建客户端连接对象
+//---------------------------------------------------------------------
 redisClient *createClient(int fd) {
     redisClient *c = zmalloc(sizeof(redisClient));
 
+    // fd = -1 表示是伪客户端
     /* passing -1 as fd it is possible to create a non connected client.
      * This is useful since all the Redis commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
     if (fd != -1) {
+        // 设置位非阻塞
         anetNonBlock(NULL,fd);
+        // 设置 TcpNoDelay
         anetEnableTcpNoDelay(NULL,fd);
+        // 判断是否设置 KeepAlive
         if (server.tcpkeepalive)
             anetKeepAlive(NULL,fd,server.tcpkeepalive);
+        // 监听可读事件
         if (aeCreateFileEvent(server.el,fd,AE_READABLE,
             readQueryFromClient, c) == AE_ERR)
         {
@@ -71,11 +80,14 @@ redisClient *createClient(int fd) {
         }
     }
 
+    // 初始化其他属性
+    // 设置 c->db
     selectDb(c,0);
     c->id = server.next_client_id++;
     c->fd = fd;
     c->name = NULL;
     c->bufpos = 0;
+    // 初始化请求缓冲区为空
     c->querybuf = sdsempty();
     c->querybuf_peak = 0;
     c->reqtype = 0;
@@ -109,8 +121,13 @@ redisClient *createClient(int fd) {
     c->peerid = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
+
+    // 普通客户端连接追加到 clients 链表尾部
     if (fd != -1) listAddNodeTail(server.clients,c);
+    // 初始化 MULTI/EXEC 相关的属性
     initClientMultiState(c);
+
+    // 返回 redisClient
     return c;
 }
 
@@ -539,8 +556,13 @@ void copyClientOutputBuffer(redisClient *dst, redisClient *src) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
+
+//---------------------------------------------------------------------
+// 新来客户端连接处理函数
+//---------------------------------------------------------------------
 static void acceptCommonHandler(int fd, int flags) {
     redisClient *c;
+    // 创建一个 redisClient
     if ((c = createClient(fd)) == NULL) {
         redisLog(REDIS_WARNING,
             "Error registering fd event for the new client: %s (fd=%d)",
@@ -552,22 +574,31 @@ static void acceptCommonHandler(int fd, int flags) {
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
      * mode and we can send an error for free using the Kernel I/O */
+    // 判断是否超过了最大连接数
     if (listLength(server.clients) > server.maxclients) {
         char *err = "-ERR max number of clients reached\r\n";
 
         /* That's a best effort error message, don't check write errors */
+        // 尝试发送一条错误消息给客户端
         if (write(c->fd,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
         server.stat_rejected_conn++;
+        // 销毁 redisClient
         freeClient(c);
         return;
     }
     server.stat_numconnections++;
+    // 设置连接方式标志位
     c->flags |= flags;
 }
 
+
+//---------------------------------------------------------------------
+// 接受客户端连接事件回调
+//---------------------------------------------------------------------
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+    // MAX_ACCEPTS_PER_CALL 每次调用尝试接受客户端最大个数
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[REDIS_IP_STR_LEN];
     REDIS_NOTUSED(el);
@@ -583,6 +614,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
+        // 调用新来客户端连接处理函数
         acceptCommonHandler(cfd,0);
     }
 }
@@ -841,6 +873,10 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 }
 
 /* resetClient prepare the client to process the next command */
+
+//---------------------------------------------------------------------
+// 重置客户端的一些属性，好接着解析处理下一条命令
+//---------------------------------------------------------------------
 void resetClient(redisClient *c) {
     freeClientArgv(c);
     c->reqtype = 0;
@@ -850,6 +886,12 @@ void resetClient(redisClient *c) {
     if (!(c->flags & REDIS_MULTI)) c->flags &= (~REDIS_ASKING);
 }
 
+
+//---------------------------------------------------------------------
+// 解析命令
+//
+// 填充 argc,argv
+//---------------------------------------------------------------------
 int processInlineBuffer(redisClient *c) {
     char *newline;
     int argc, j;
@@ -873,8 +915,10 @@ int processInlineBuffer(redisClient *c) {
         newline--;
 
     /* Split the input buffer up to the \r\n */
+    // 分离出命令部分
     querylen = newline-(c->querybuf);
     aux = sdsnewlen(c->querybuf,querylen);
+    // 用 sdssplitargs 分割参数
     argv = sdssplitargs(aux,&argc);
     sdsfree(aux);
     if (argv == NULL) {
@@ -894,6 +938,7 @@ int processInlineBuffer(redisClient *c) {
 
     /* Setup argv array on client structure */
     if (argc) {
+        // 释放掉旧的，分配新的给 argv
         if (c->argv) zfree(c->argv);
         c->argv = zmalloc(sizeof(robj*)*argc);
     }
@@ -901,9 +946,11 @@ int processInlineBuffer(redisClient *c) {
     /* Create redis objects for all arguments. */
     for (c->argc = 0, j = 0; j < argc; j++) {
         if (sdslen(argv[j])) {
+            // 创建 redisObject 存到 c->argv 中
             c->argv[c->argc] = createObject(REDIS_STRING,argv[j]);
             c->argc++;
         } else {
+            // 跳过为空的参数
             sdsfree(argv[j]);
         }
     }
@@ -1062,10 +1109,16 @@ int processMultibulkBuffer(redisClient *c) {
     return REDIS_ERR;
 }
 
+
+//---------------------------------------------------------------------
+// 从请求缓冲区中解析出命令
+//---------------------------------------------------------------------
 void processInputBuffer(redisClient *c) {
     /* Keep processing while there is something in the input buffer */
+    // 循环处理
     while(sdslen(c->querybuf)) {
         /* Immediately abort if the client is in the middle of something. */
+        // 当前客户端出于阻塞状态，不继续处理命令直接返回
         if (c->flags & REDIS_BLOCKED) return;
 
         /* REDIS_CLOSE_AFTER_REPLY closes the connection once the reply is
@@ -1074,6 +1127,7 @@ void processInputBuffer(redisClient *c) {
         if (c->flags & REDIS_CLOSE_AFTER_REPLY) return;
 
         /* Determine request type when unknown. */
+        // 根据首字节检测请求类型
         if (!c->reqtype) {
             if (c->querybuf[0] == '*') {
                 c->reqtype = REDIS_REQ_MULTIBULK;
@@ -1082,25 +1136,34 @@ void processInputBuffer(redisClient *c) {
             }
         }
 
+        // 解析命令，失败直接返回，等待读到更多的数据包
         if (c->reqtype == REDIS_REQ_INLINE) {
             if (processInlineBuffer(c) != REDIS_OK) break;
         } else if (c->reqtype == REDIS_REQ_MULTIBULK) {
             if (processMultibulkBuffer(c) != REDIS_OK) break;
         } else {
+            // panic?
             redisPanic("Unknown request type");
         }
 
         /* Multibulk processing could see a <= 0 length. */
         if (c->argc == 0) {
+            // 空命令，重置客户端，接着等待处理下一条命令
             resetClient(c);
         } else {
             /* Only reset the client when the command was executed. */
+            // 读到一条命令后，处理命令
             if (processCommand(c) == REDIS_OK)
+                // 处理失败则重置客户端
                 resetClient(c);
         }
     }
 }
 
+
+//---------------------------------------------------------------------
+// 处理请求数据包读取
+//---------------------------------------------------------------------
 void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     redisClient *c = (redisClient*) privdata;
     int nread, readlen;
@@ -1109,6 +1172,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(mask);
 
     server.current_client = c;
+    // 每次尝试读 16k
     readlen = REDIS_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply
      * that is large enough, try to maximize the probability that the query
@@ -1124,42 +1188,61 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (remaining < readlen) readlen = remaining;
     }
 
+    // qblen 当前请求缓冲区已读数据包大小
     qblen = sdslen(c->querybuf);
+    // 计算可 peek 的缓冲区长度
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
+    // 为下面的读操作申请更多的缓冲区
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
+    // socket read
     nread = read(fd, c->querybuf+qblen, readlen);
     if (nread == -1) {
+        // 读出错了
         if (errno == EAGAIN) {
+            // EAGAIN 没有数据可读，等待下一次可读事件触发
             nread = 0;
         } else {
+            // 其他错误处理
             redisLog(REDIS_VERBOSE, "Reading from client: %s",strerror(errno));
             freeClient(c);
             return;
         }
     } else if (nread == 0) {
+        // 对端断开了连接
         redisLog(REDIS_VERBOSE, "Client closed connection");
+        // 销毁客户端连接对象并返回
         freeClient(c);
         return;
     }
+
     if (nread) {
+        // 读到了数据
+        // 修正 querybuf 长度
         sdsIncrLen(c->querybuf,nread);
+        // 更新数据交互时间记录
         c->lastinteraction = server.unixtime;
         if (c->flags & REDIS_MASTER) c->reploff += nread;
         server.stat_net_input_bytes += nread;
     } else {
+        // 没读到数据就返回
         server.current_client = NULL;
         return;
     }
+
+    // 缓冲区大小超过了设定的最大值
     if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
 
         bytes = sdscatrepr(bytes,c->querybuf,64);
+        // 记录日志并销毁客户端连接对象
         redisLog(REDIS_WARNING,"Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci, bytes);
         sdsfree(ci);
         sdsfree(bytes);
         freeClient(c);
         return;
     }
+
+    // 尝试解析当前已读到的数据包
     processInputBuffer(c);
     server.current_client = NULL;
 }
