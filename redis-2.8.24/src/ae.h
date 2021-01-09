@@ -33,18 +33,45 @@
 #ifndef __AE_H__
 #define __AE_H__
 
+
+//=====================================================================
+// ioloop
+//
+// 其实现依赖于 fd 作为数组索引去获取相应信息
+// 利用了程序产生的文件描述符从很小的值开始增长的特性
+//=====================================================================
+
+//---------------------------------------------------------------------
+// 函数返回状态码
+//
+// 0  为成功
+// -1 为失败
+//---------------------------------------------------------------------
 #define AE_OK 0
 #define AE_ERR -1
 
+
+//---------------------------------------------------------------------
+// 监听事件类型
+//---------------------------------------------------------------------
 #define AE_NONE 0
 #define AE_READABLE 1
 #define AE_WRITABLE 2
 
+
+//---------------------------------------------------------------------
+// 事件类型
+//
+// 1 fd
+// 2 定时器
+//---------------------------------------------------------------------
 #define AE_FILE_EVENTS 1
 #define AE_TIME_EVENTS 2
 #define AE_ALL_EVENTS (AE_FILE_EVENTS|AE_TIME_EVENTS)
+// 不阻塞等待 poll
 #define AE_DONT_WAIT 4
 
+// 定时器回调返回该值表示是一次性定时器
 #define AE_NOMORE -1
 
 /* Macros */
@@ -59,41 +86,79 @@ typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientDat
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 
 /* File event structure */
+
+//---------------------------------------------------------------------
+// fd 事件
+//---------------------------------------------------------------------
 typedef struct aeFileEvent {
+    // 触发的事件状态
     int mask; /* one of AE_(READABLE|WRITABLE) */
+    // 可读事件回调函数
     aeFileProc *rfileProc;
+    // 可写事件回调函数
     aeFileProc *wfileProc;
+    // 附加上下文
     void *clientData;
 } aeFileEvent;
 
 /* Time event structure */
+
+//---------------------------------------------------------------------
+// 定时器事件
+//---------------------------------------------------------------------
 typedef struct aeTimeEvent {
+    // 定时器 ID
     long long id; /* time event identifier. */
+    // 时间
     long when_sec; /* seconds */
     long when_ms; /* milliseconds */
+    // 定时器回调函数
     aeTimeProc *timeProc;
+    // 移除时的销毁清理函数
     aeEventFinalizerProc *finalizerProc;
+    // 附加上下文
     void *clientData;
+    // 单向链表 next 指针
     struct aeTimeEvent *next;
 } aeTimeEvent;
 
 /* A fired event */
+
+//---------------------------------------------------------------------
+// poll 返回的激活的事件
+//---------------------------------------------------------------------
 typedef struct aeFiredEvent {
+    // fd
     int fd;
+    // 触发的事件状态
     int mask;
 } aeFiredEvent;
 
 /* State of an event based program */
+
+//---------------------------------------------------------------------
+// ioloop 结构
+//---------------------------------------------------------------------
 typedef struct aeEventLoop {
+    // 当前所有注册文件描述符的最大值
     int maxfd;   /* highest file descriptor currently registered */
+    // 跟踪监听的文件描述符个数
     int setsize; /* max number of file descriptors tracked */
+    // 下一个 timer id
     long long timeEventNextId;
+    // 记录上一次定时器处理时间
     time_t lastTime;     /* Used to detect system clock skew */
+    // 已注册的 fd 事件数组
     aeFileEvent *events; /* Registered events */
+    // 激活的事件数组
     aeFiredEvent *fired; /* Fired events */
+    // 定时器列表头指针
     aeTimeEvent *timeEventHead;
+    // 停止标志
     int stop;
+    // 具体实现结构体
     void *apidata; /* This is used for polling API specific data */
+    // 每轮轮询前要运行的函数
     aeBeforeSleepProc *beforesleep;
 } aeEventLoop;
 
