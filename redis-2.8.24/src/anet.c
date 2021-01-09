@@ -48,6 +48,10 @@
 
 #include "anet.h"
 
+
+//---------------------------------------------------------------------
+// 设置错误消息
+//---------------------------------------------------------------------
 static void anetSetError(char *err, const char *fmt, ...)
 {
     va_list ap;
@@ -58,6 +62,10 @@ static void anetSetError(char *err, const char *fmt, ...)
     va_end(ap);
 }
 
+
+//---------------------------------------------------------------------
+// 设置套接字阻塞选项
+//---------------------------------------------------------------------
 int anetSetBlock(char *err, int fd, int non_block) {
     int flags;
 
@@ -92,6 +100,10 @@ int anetBlock(char *err, int fd) {
 /* Set TCP keep alive option to detect dead peers. The interval option
  * is only used for Linux as we are using Linux-specific APIs to set
  * the probe send time, interval, and count. */
+
+//---------------------------------------------------------------------
+// 设置 SO_KEEPALIVE
+//---------------------------------------------------------------------
 int anetKeepAlive(char *err, int fd, int interval)
 {
     int val = 1;
@@ -102,6 +114,7 @@ int anetKeepAlive(char *err, int fd, int interval)
         return ANET_ERR;
     }
 
+    // __linux__ 支持设置频率
 #ifdef __linux__
     /* Default settings are more or less garbage, with the keepalive time
      * set to 7200 by default on Linux. Modify settings to make the feature
@@ -138,6 +151,10 @@ int anetKeepAlive(char *err, int fd, int interval)
     return ANET_OK;
 }
 
+
+//---------------------------------------------------------------------
+// 设置 TCP_NODELAY
+//---------------------------------------------------------------------
 static int anetSetTcpNoDelay(char *err, int fd, int val)
 {
     if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val)) == -1)
@@ -159,6 +176,10 @@ int anetDisableTcpNoDelay(char *err, int fd)
 }
 
 
+
+//---------------------------------------------------------------------
+// 设置发送缓冲区大小
+//---------------------------------------------------------------------
 int anetSetSendBuffer(char *err, int fd, int buffsize)
 {
     if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buffsize, sizeof(buffsize)) == -1)
@@ -169,6 +190,10 @@ int anetSetSendBuffer(char *err, int fd, int buffsize)
     return ANET_OK;
 }
 
+
+//---------------------------------------------------------------------
+// 设置 SO_KEEPALIVE
+//---------------------------------------------------------------------
 int anetTcpKeepAlive(char *err, int fd)
 {
     int yes = 1;
@@ -181,6 +206,10 @@ int anetTcpKeepAlive(char *err, int fd)
 
 /* Set the socket send timeout (SO_SNDTIMEO socket option) to the specified
  * number of milliseconds, or disable it if the 'ms' argument is zero. */
+
+//---------------------------------------------------------------------
+// 设置发送数据包超时事件
+//---------------------------------------------------------------------
 int anetSendTimeout(char *err, int fd, long long ms) {
     struct timeval tv;
 
@@ -200,6 +229,10 @@ int anetSendTimeout(char *err, int fd, long long ms) {
  * If flags is set to ANET_IP_ONLY the function only resolves hostnames
  * that are actually already IPv4 or IPv6 addresses. This turns the function
  * into a validating / normalizing function. */
+
+//---------------------------------------------------------------------
+// 解析域名
+//---------------------------------------------------------------------
 int anetGenericResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len,
                        int flags)
 {
@@ -246,6 +279,10 @@ static int anetSetReuseAddr(char *err, int fd) {
     return ANET_OK;
 }
 
+
+//---------------------------------------------------------------------
+// 创建一个 tcp scoket
+//---------------------------------------------------------------------
 static int anetCreateSocket(char *err, int domain) {
     int s;
     if ((s = socket(domain, SOCK_STREAM, 0)) == -1) {
@@ -255,6 +292,7 @@ static int anetCreateSocket(char *err, int domain) {
 
     /* Make sure connection-intensive things like the redis benchmark
      * will be able to close/open sockets a zillion of times */
+    // 默认开启 SO_REUSEADDR
     if (anetSetReuseAddr(err,s) == ANET_ERR) {
         close(s);
         return ANET_ERR;
@@ -264,6 +302,10 @@ static int anetCreateSocket(char *err, int domain) {
 
 #define ANET_CONNECT_NONE 0
 #define ANET_CONNECT_NONBLOCK 1
+
+//---------------------------------------------------------------------
+// 连接服务器
+//---------------------------------------------------------------------
 static int anetTcpGenericConnect(char *err, char *addr, int port, int flags)
 {
     int s = ANET_ERR, rv;
@@ -291,6 +333,7 @@ static int anetTcpGenericConnect(char *err, char *addr, int port, int flags)
         if (connect(s,p->ai_addr,p->ai_addrlen) == -1) {
             /* If the socket is non-blocking, it is ok for connect() to
              * return an EINPROGRESS error here. */
+            // 判断 EINPROGRESS
             if (errno == EINPROGRESS && flags & ANET_CONNECT_NONBLOCK)
                 goto end;
             close(s);
@@ -363,6 +406,10 @@ int anetUnixNonBlockConnect(char *err, char *path)
 
 /* Like read(2) but make sure 'count' is read before to return
  * (unless error or EOF condition is encountered) */
+
+//---------------------------------------------------------------------
+// 循环读
+//---------------------------------------------------------------------
 int anetRead(int fd, char *buf, int count)
 {
     int nread, totlen = 0;
@@ -378,6 +425,10 @@ int anetRead(int fd, char *buf, int count)
 
 /* Like write(2) but make sure 'count' is read before to return
  * (unless error is encountered) */
+
+//---------------------------------------------------------------------
+// 循环写
+//---------------------------------------------------------------------
 int anetWrite(int fd, char *buf, int count)
 {
     int nwritten, totlen = 0;
@@ -391,6 +442,10 @@ int anetWrite(int fd, char *buf, int count)
     return totlen;
 }
 
+
+//---------------------------------------------------------------------
+// 绑定监听套接字
+//---------------------------------------------------------------------
 static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog) {
     if (bind(s,sa,len) == -1) {
         anetSetError(err, "bind: %s", strerror(errno));
@@ -453,6 +508,10 @@ end:
     return s;
 }
 
+
+//---------------------------------------------------------------------
+// 创建一个 IPv4 的 tcp server
+//---------------------------------------------------------------------
 int anetTcpServer(char *err, int port, char *bindaddr, int backlog)
 {
     return _anetTcpServer(err, port, bindaddr, AF_INET, backlog);
@@ -498,6 +557,10 @@ static int anetGenericAccept(char *err, int s, struct sockaddr *sa, socklen_t *l
     return fd;
 }
 
+
+//---------------------------------------------------------------------
+// accept
+//---------------------------------------------------------------------
 int anetTcpAccept(char *err, int s, char *ip, size_t ip_len, int *port) {
     int fd;
     struct sockaddr_storage sa;
@@ -527,6 +590,10 @@ int anetUnixAccept(char *err, int s) {
     return fd;
 }
 
+
+//---------------------------------------------------------------------
+// 获得对端连接字符串
+//---------------------------------------------------------------------
 int anetPeerToString(int fd, char *ip, size_t ip_len, int *port) {
     struct sockaddr_storage sa;
     socklen_t salen = sizeof(sa);
@@ -549,6 +616,9 @@ int anetPeerToString(int fd, char *ip, size_t ip_len, int *port) {
     return 0;
 }
 
+//---------------------------------------------------------------------
+// 获得本地端连接字符串
+//---------------------------------------------------------------------
 int anetSockName(int fd, char *ip, size_t ip_len, int *port) {
     struct sockaddr_storage sa;
     socklen_t salen = sizeof(sa);
