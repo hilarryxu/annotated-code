@@ -156,10 +156,16 @@ robj *dbRandomKey(redisDb *db) {
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
+
+//---------------------------------------------------------------------
+// 删除键值对，同时删除过期字典中的键
+//---------------------------------------------------------------------
 int dbDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
+    // 删除过期字典中的键
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
+    // 删除键值对
     if (dictDelete(db->dict,key->ptr) == DICT_OK) {
         return 1;
     } else {
@@ -271,19 +277,29 @@ void flushallCommand(redisClient *c) {
     server.dirty++;
 }
 
+
+//---------------------------------------------------------------------
+// del 命令
+//---------------------------------------------------------------------
 void delCommand(redisClient *c) {
     int deleted = 0, j;
 
     for (j = 1; j < c->argc; j++) {
+        // 过期检测
         expireIfNeeded(c->db,c->argv[j]);
+        // 执行删除操作
         if (dbDelete(c->db,c->argv[j])) {
+            // 通知键修改
             signalModifiedKey(c->db,c->argv[j]);
+            // keyspace 事件通知
             notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,
                 "del",c->argv[j],c->db->id);
+            // 脏计数加 1
             server.dirty++;
             deleted++;
         }
     }
+    // 返回已删除键个数
     addReplyLongLong(c,deleted);
 }
 
