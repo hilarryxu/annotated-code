@@ -1205,6 +1205,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Close clients that need to be closed asynchronous */
+    // 关闭延迟销毁的那些客户端
+    // 定时器在套接字处理之后运行的，此时没有数据收发动作了，
+    // 在这里可以安全的释放关闭客户端
     freeClientsInAsyncFreeQueue();
 
     /* Replication cron function -- used to reconnect to master and
