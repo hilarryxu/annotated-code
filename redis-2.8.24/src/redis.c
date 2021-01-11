@@ -54,6 +54,10 @@
 
 /* Our shared "common" objects */
 
+
+//---------------------------------------------------------------------
+// 共享对象
+//---------------------------------------------------------------------
 struct sharedObjectsStruct shared;
 
 /* Global vars that are actually used as constants. The following double
@@ -65,6 +69,10 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 /*================================= Globals ================================= */
 
 /* Global vars */
+
+//---------------------------------------------------------------------
+// 全局的服务器状态
+//---------------------------------------------------------------------
 struct redisServer server; /* server global state */
 
 /* Our command table.
@@ -117,6 +125,24 @@ struct redisServer server; /* server global state */
  *    Note that commands that may trigger a DEL as a side effect (like SET)
  *    are not fast commands.
  */
+
+//---------------------------------------------------------------------
+// 命令表
+//
+// struct redisCommand {
+//     char *name;                      // 命令名称
+//     redisCommandProc *proc;          // 处理函数
+//     int arity;                       // 参数个数（包含命令本身）
+//     char *sflags;                    // 字符串标志
+//     int flags;                       // 标志
+//     redisGetKeysProc *getkeys_proc;  // 获取键的函数
+//     int firstkey;                    // 第一个键的下标
+//     int lastkey;                     // 最后一个键的下标
+//     int keystep;                     // 步进值
+//     long long microseconds;          // 命令执行时长
+//     long long calls;                 // 命令总执行次数
+// };
+//---------------------------------------------------------------------
 struct redisCommand redisCommandTable[] = {
     {"get",getCommand,2,"rF",0,NULL,1,1,1,0,0},
     {"set",setCommand,-3,"wm",0,NULL,1,1,1,0,0},
@@ -522,6 +548,10 @@ dictType zsetDictType = {
 };
 
 /* Db->dict, keys are sds strings, vals are Redis objects. */
+
+//---------------------------------------------------------------------
+// db->dict 是一个键为 sds 字符串，值为 redisObject 的字典
+//---------------------------------------------------------------------
 dictType dbDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
@@ -1002,6 +1032,13 @@ void updateCachedTime(void) {
  * a macro is used: run_with_period(milliseconds) { .... }
  */
 
+
+//---------------------------------------------------------------------
+// 主要的定时器处理函数
+//
+// server.hz/s 即每秒执行 server.hz 次
+// 默认值为 100ms 执行一次
+//---------------------------------------------------------------------
 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     int j;
     REDIS_NOTUSED(eventLoop);
