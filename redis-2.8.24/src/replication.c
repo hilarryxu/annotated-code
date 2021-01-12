@@ -259,6 +259,10 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     }
 }
 
+
+//---------------------------------------------------------------------
+// 发送命令信息给监视器
+//---------------------------------------------------------------------
 void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **argv, int argc) {
     listNode *ln;
     listIter li;
@@ -268,15 +272,18 @@ void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **
     struct timeval tv;
 
     gettimeofday(&tv,NULL);
+    // 时间戳部分
     cmdrepr = sdscatprintf(cmdrepr,"%ld.%06ld ",(long)tv.tv_sec,(long)tv.tv_usec);
     if (c->flags & REDIS_LUA_CLIENT) {
         cmdrepr = sdscatprintf(cmdrepr,"[%d lua] ",dictid);
     } else if (c->flags & REDIS_UNIX_SOCKET) {
         cmdrepr = sdscatprintf(cmdrepr,"[%d unix:%s] ",dictid,server.unixsocket);
     } else {
+        // 数据库序号 + 对端的 ip:port
         cmdrepr = sdscatprintf(cmdrepr,"[%d %s] ",dictid,getClientPeerId(c));
     }
 
+    // 命令和参数列表
     for (j = 0; j < argc; j++) {
         if (argv[j]->encoding == REDIS_ENCODING_INT) {
             cmdrepr = sdscatprintf(cmdrepr, "\"%ld\"", (long)argv[j]->ptr);
@@ -293,6 +300,8 @@ void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **
     listRewind(monitors,&li);
     while((ln = listNext(&li))) {
         redisClient *monitor = ln->value;
+        // +1339518083.107412 [0 127.0.0.1:60866] "keys" "*"
+        // 用成功状态码形式的响应发给客户端
         addReply(monitor,cmdobj);
     }
     decrRefCount(cmdobj);

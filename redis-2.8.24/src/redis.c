@@ -2007,6 +2007,10 @@ void call(redisClient *c, int flags) {
 
     /* Sent the command to clients in MONITOR mode, only if the commands are
      * not generated from reading an AOF. */
+    // 发送命令给监视器
+    //
+    // 启动加载阶段除外
+    // REDIS_CMD_SKIP_MONITOR|REDIS_CMD_ADMIN 类型的命令除外
     if (listLength(server.monitors) &&
         !server.loading &&
         !(c->cmd->flags & (REDIS_CMD_SKIP_MONITOR|REDIS_CMD_ADMIN)))
@@ -2978,11 +2982,17 @@ void infoCommand(redisClient *c) {
     addReply(c,shared.crlf);
 }
 
+
+//---------------------------------------------------------------------
+// monitor 命令
+//---------------------------------------------------------------------
 void monitorCommand(redisClient *c) {
     /* ignore MONITOR if already slave or in monitor mode */
     if (c->flags & REDIS_SLAVE) return;
 
+    // 设置 REDIS_SLAVE|REDIS_MONITOR 标志位
     c->flags |= (REDIS_SLAVE|REDIS_MONITOR);
+    // 添加到 server.monitors 尾部
     listAddNodeTail(server.monitors,c);
     addReply(c,shared.ok);
 }
