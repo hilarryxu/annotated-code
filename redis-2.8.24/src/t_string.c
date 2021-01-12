@@ -34,6 +34,10 @@
  * String Commands
  *----------------------------------------------------------------------------*/
 
+
+//---------------------------------------------------------------------
+// 值对象字符串不能超过 512MB
+//---------------------------------------------------------------------
 static int checkStringLength(redisClient *c, long long size) {
     if (size > 512*1024*1024) {
         addReplyError(c,"string exceeds maximum allowed size (512MB)");
@@ -62,6 +66,10 @@ static int checkStringLength(redisClient *c, long long size) {
 #define REDIS_SET_NX (1<<0)     /* Set if key not exists. */
 #define REDIS_SET_XX (1<<1)     /* Set if key exists. */
 
+
+//---------------------------------------------------------------------
+// set 相关命令
+//---------------------------------------------------------------------
 void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *expire, int unit, robj *ok_reply, robj *abort_reply) {
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
 
@@ -81,8 +89,10 @@ void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *ex
         addReply(c, abort_reply ? abort_reply : shared.nullbulk);
         return;
     }
+    // 设置值
     setKey(c->db,key,val);
     server.dirty++;
+    // 过期时间
     if (expire) setExpire(c->db,key,mstime()+milliseconds);
     notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"set",key,c->db->id);
     if (expire) notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,
@@ -145,10 +155,12 @@ void psetexCommand(redisClient *c) {
 int getGenericCommand(redisClient *c) {
     robj *o;
 
+    // 查找键
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk)) == NULL)
         return REDIS_OK;
 
     if (o->type != REDIS_STRING) {
+        // 类型不是字符串
         addReply(c,shared.wrongtypeerr);
         return REDIS_ERR;
     } else {
@@ -157,10 +169,18 @@ int getGenericCommand(redisClient *c) {
     }
 }
 
+
+//---------------------------------------------------------------------
+// get 命令
+//---------------------------------------------------------------------
 void getCommand(redisClient *c) {
     getGenericCommand(c);
 }
 
+
+//---------------------------------------------------------------------
+// getset 命令
+//---------------------------------------------------------------------
 void getsetCommand(redisClient *c) {
     if (getGenericCommand(c) == REDIS_ERR) return;
     c->argv[2] = tryObjectEncoding(c->argv[2]);
@@ -266,6 +286,10 @@ void getrangeCommand(redisClient *c) {
     }
 }
 
+
+//---------------------------------------------------------------------
+// mget 命令
+//---------------------------------------------------------------------
 void mgetCommand(redisClient *c) {
     int j;
 
@@ -284,9 +308,14 @@ void mgetCommand(redisClient *c) {
     }
 }
 
+
+//---------------------------------------------------------------------
+// mset 命令
+//---------------------------------------------------------------------
 void msetGenericCommand(redisClient *c, int nx) {
     int j, busykeys = 0;
 
+    // 检查参数个数
     if ((c->argc % 2) == 0) {
         addReplyError(c,"wrong number of arguments for MSET");
         return;
@@ -307,6 +336,7 @@ void msetGenericCommand(redisClient *c, int nx) {
 
     for (j = 1; j < c->argc; j += 2) {
         c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
+        // 修改 key 对应的 value
         setKey(c->db,c->argv[j],c->argv[j+1]);
         notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"set",c->argv[j],c->db->id);
     }
@@ -322,12 +352,17 @@ void msetnxCommand(redisClient *c) {
     msetGenericCommand(c,1);
 }
 
+
+//---------------------------------------------------------------------
+// incrDecr 相关命令
+//---------------------------------------------------------------------
 void incrDecrCommand(redisClient *c, long long incr) {
     long long value, oldvalue;
     robj *o, *new;
 
     o = lookupKeyWrite(c->db,c->argv[1]);
     if (o != NULL && checkType(c,o,REDIS_STRING)) return;
+    // 键不存在时，value = 0
     if (getLongLongFromObjectOrReply(c,o,&value,NULL) != REDIS_OK) return;
 
     oldvalue = value;
@@ -336,16 +371,22 @@ void incrDecrCommand(redisClient *c, long long incr) {
         addReplyError(c,"increment or decrement would overflow");
         return;
     }
+    // 执行算数运算
     value += incr;
+    // 从 long long 整数创建一个字符串对象
     new = createStringObjectFromLongLong(value);
     if (o)
+        // 覆盖
         dbOverwrite(c->db,c->argv[1],new);
     else
+        // 新建
         dbAdd(c->db,c->argv[1],new);
+    // 相关通知和事件发送
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"incrby",c->argv[1],c->db->id);
     server.dirty++;
     addReply(c,shared.colon);
+    // 返回新值
     addReply(c,new);
     addReply(c,shared.crlf);
 }
@@ -372,6 +413,10 @@ void decrbyCommand(redisClient *c) {
     incrDecrCommand(c,-incr);
 }
 
+
+//---------------------------------------------------------------------
+// incrbyfloat 命令
+//---------------------------------------------------------------------
 void incrbyfloatCommand(redisClient *c) {
     long double incr, value;
     robj *o, *new, *aux;
@@ -400,12 +445,18 @@ void incrbyfloatCommand(redisClient *c) {
     /* Always replicate INCRBYFLOAT as a SET command with the final value
      * in order to make sure that differences in float precision or formatting
      * will not create differences in replicas or after an AOF restart. */
+    // 改写命令为 SET key float-value
+    // 避免主从服务器之间系统在浮点数精度和格式化浮点数的差异，造成数据不一致
     aux = createStringObject("SET",3);
     rewriteClientCommandArgument(c,0,aux);
     decrRefCount(aux);
     rewriteClientCommandArgument(c,2,new);
 }
 
+
+//---------------------------------------------------------------------
+// append 命令
+//---------------------------------------------------------------------
 void appendCommand(redisClient *c) {
     size_t totlen;
     robj *o, *append;
@@ -413,12 +464,14 @@ void appendCommand(redisClient *c) {
     o = lookupKeyWrite(c->db,c->argv[1]);
     if (o == NULL) {
         /* Create the key */
+        // 不存在则新建一个
         c->argv[2] = tryObjectEncoding(c->argv[2]);
         dbAdd(c->db,c->argv[1],c->argv[2]);
         incrRefCount(c->argv[2]);
         totlen = stringObjectLen(c->argv[2]);
     } else {
         /* Key exists, check type */
+        // 检查类型
         if (checkType(c,o,REDIS_STRING))
             return;
 
@@ -429,6 +482,8 @@ void appendCommand(redisClient *c) {
             return;
 
         /* Append the value */
+        // 追加到原有值的尾部
+        // 优先尝试复用原有值对象而不是新建一个
         o = dbUnshareStringValue(c->db,c->argv[1],o);
         o->ptr = sdscatlen(o->ptr,append->ptr,sdslen(append->ptr));
         totlen = sdslen(o->ptr);
@@ -439,6 +494,10 @@ void appendCommand(redisClient *c) {
     addReplyLongLong(c,totlen);
 }
 
+
+//---------------------------------------------------------------------
+// strlen 命令
+//---------------------------------------------------------------------
 void strlenCommand(redisClient *c) {
     robj *o;
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||

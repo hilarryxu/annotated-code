@@ -39,6 +39,10 @@ void SlotToKeyDel(robj *key);
  * C-level DB API
  *----------------------------------------------------------------------------*/
 
+
+//---------------------------------------------------------------------
+// db 中查找键对应的值对象
+//---------------------------------------------------------------------
 robj *lookupKey(redisDb *db, robj *key) {
     dictEntry *de = dictFind(db->dict,key->ptr);
     if (de) {
@@ -48,6 +52,9 @@ robj *lookupKey(redisDb *db, robj *key) {
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
         if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
+            // 更新访问时间
+            // RDB AOF 持久化过程中不执行该操作
+            // 避免影响子进程内存写时拷贝的问题
             val->lru = server.lruclock;
         return val;
     } else {
@@ -55,11 +62,18 @@ robj *lookupKey(redisDb *db, robj *key) {
     }
 }
 
+
+//---------------------------------------------------------------------
+// 查找键
+//---------------------------------------------------------------------
 robj *lookupKeyRead(redisDb *db, robj *key) {
     robj *val;
 
+    // 过期判断
     expireIfNeeded(db,key);
+    // 查找键
     val = lookupKey(db,key);
+    // 更新统计信息
     if (val == NULL)
         server.stat_keyspace_misses++;
     else
@@ -72,6 +86,10 @@ robj *lookupKeyWrite(redisDb *db, robj *key) {
     return lookupKey(db,key);
 }
 
+
+//---------------------------------------------------------------------
+// 查找键，找不到返回提供的 reply
+//---------------------------------------------------------------------
 robj *lookupKeyReadOrReply(redisClient *c, robj *key, robj *reply) {
     robj *o = lookupKeyRead(c->db, key);
     if (!o) addReply(c,reply);
@@ -114,6 +132,14 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
  * 1) The ref count of the value object is incremented.
  * 2) clients WATCHing for the destination key notified.
  * 3) The expire time of the key is reset (the key is made persistent). */
+
+//---------------------------------------------------------------------
+// 设置值
+//
+// 增加值的引用计数
+// 通知 watch
+// 清除过期时间
+//---------------------------------------------------------------------
 void setKey(redisDb *db, robj *key, robj *val) {
     if (lookupKeyWrite(db,key) == NULL) {
         dbAdd(db,key,val);
@@ -200,14 +226,23 @@ int dbDelete(redisDb *db, robj *key) {
  * At this point the caller is ready to modify the object, for example
  * using an sdscat() call to append some data, or anything else.
  */
+
+//---------------------------------------------------------------------
+// 尝试复用数据库中键对应值的该字符串对象
+//---------------------------------------------------------------------
 robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
+    // 必须为字符串对象
     redisAssert(o->type == REDIS_STRING);
     if (o->refcount != 1 || o->encoding != REDIS_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
+        // 复制一份
         o = createStringObject(decoded->ptr, sdslen(decoded->ptr));
         decrRefCount(decoded);
+        // 覆盖原有的值
         dbOverwrite(db,key,o);
     }
+    // 引用计数为 1
+    // 且编码方式为 REDIS_ENCODING_RAW
     return o;
 }
 

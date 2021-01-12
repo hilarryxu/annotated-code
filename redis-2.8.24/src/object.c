@@ -385,6 +385,13 @@ robj *resetRefCount(robj *obj) {
     return obj;
 }
 
+
+//---------------------------------------------------------------------
+// 检测对象类型
+//
+// 成功返回 0
+// 失败返回 1，并返回类型错误响应
+//---------------------------------------------------------------------
 int checkType(redisClient *c, robj *o, int type) {
     if (o->type != type) {
         addReply(c,shared.wrongtypeerr);
