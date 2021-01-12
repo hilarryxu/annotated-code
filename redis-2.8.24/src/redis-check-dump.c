@@ -136,6 +136,10 @@ typedef struct {
 /* Global vars that are actually used as constants. The following double
  * values are used for double on-disk serialization, and are initialized
  * at runtime to avoid strange compiler optimizations. */
+
+//---------------------------------------------------------------------
+// 几个特殊的浮点数
+//---------------------------------------------------------------------
 static double R_Zero, R_PosInf, R_NegInf, R_Nan;
 
 #define MAX_TYPES_NUM 256
@@ -144,6 +148,10 @@ static double R_Zero, R_PosInf, R_NegInf, R_Nan;
 static char types[MAX_TYPES_NUM][MAX_TYPE_NAME_LEN];
 
 /* Return true if 't' is a valid object type. */
+
+//---------------------------------------------------------------------
+// 检查类型是否合法
+//---------------------------------------------------------------------
 int checkType(unsigned char t) {
     /* In case a new object type is added, update the following
      * condition as necessary. */
@@ -154,12 +162,19 @@ int checkType(unsigned char t) {
 }
 
 /* when number of bytes to read is negative, do a peek */
+
+//---------------------------------------------------------------------
+// 读 n 个字节
+//
+// num < 0 为 peek 模式
+//---------------------------------------------------------------------
 int readBytes(void *target, long num) {
     char peek = (num < 0) ? 1 : 0;
     num = (num < 0) ? -num : num;
 
     pos p = positions[level];
     if (p.offset + num > p.size) {
+        // 超出范围了，返回 0
         return 0;
     } else {
         memcpy(target, (void*)((size_t)p.data + p.offset), num);
@@ -168,6 +183,10 @@ int readBytes(void *target, long num) {
     return 1;
 }
 
+
+//---------------------------------------------------------------------
+// 检查头部和版本
+//---------------------------------------------------------------------
 int processHeader(void) {
     char buf[10] = "_________";
     int dump_version;
@@ -188,6 +207,10 @@ int processHeader(void) {
     return dump_version;
 }
 
+
+//---------------------------------------------------------------------
+// 读取类型
+//---------------------------------------------------------------------
 int loadType(entry *e) {
     uint32_t offset = CURR_OFFSET;
 
@@ -216,6 +239,12 @@ int peekType() {
 }
 
 /* discard time, just consume the bytes */
+
+//---------------------------------------------------------------------
+// 读取过期时间
+//
+// ms 精度时占用 8 个字节
+//---------------------------------------------------------------------
 int processTime(int type) {
     uint32_t offset = CURR_OFFSET;
     unsigned char t[8];
@@ -231,6 +260,12 @@ int processTime(int type) {
     return 0;
 }
 
+
+//---------------------------------------------------------------------
+// 读取长度字段
+//
+// UINT_MAX 表示读取出错
+//---------------------------------------------------------------------
 uint32_t loadLength(int *isencoded) {
     unsigned char buf[2];
     uint32_t len;
@@ -238,41 +273,63 @@ uint32_t loadLength(int *isencoded) {
 
     if (isencoded) *isencoded = 0;
     if (!readBytes(buf, 1)) return REDIS_RDB_LENERR;
+    // 0b11000000
+    // 取最高两位
     type = (buf[0] & 0xC0) >> 6;
     if (type == REDIS_RDB_6BITLEN) {
         /* Read a 6 bit len */
+        // 0b00111111
+        // 读取 6 bit 的长度A
+        // 2**6 = 64
+        // 即 0 ~ 63
         return buf[0] & 0x3F;
     } else if (type == REDIS_RDB_ENCVAL) {
+        // 特殊编码方式存储的长度
         /* Read a 6 bit len encoding type */
         if (isencoded) *isencoded = 1;
+        // 返回编码方式，并将 isencoded 置为 1
+        // 也就是通过这两个值来共同判断处理
         return buf[0] & 0x3F;
     } else if (type == REDIS_RDB_14BITLEN) {
         /* Read a 14 bit len */
+        // 01|000000 00000000
+        // 2**14 = 16384
+        // 即 64 ~ 16383
         if (!readBytes(buf+1,1)) return REDIS_RDB_LENERR;
         return ((buf[0] & 0x3F) << 8) | buf[1];
     } else {
         /* Read a 32 bit len */
+        // 10|000000 [32 bit integer]
+        // 32位整数
         if (!readBytes(&len, 4)) return REDIS_RDB_LENERR;
+        // 大小端转换
         return (unsigned int)ntohl(len);
     }
 }
 
+
+//---------------------------------------------------------------------
+// 读取整数对象
+//---------------------------------------------------------------------
 char *loadIntegerObject(int enctype) {
     uint32_t offset = CURR_OFFSET;
     unsigned char enc[4];
     long long val;
 
     if (enctype == REDIS_RDB_ENC_INT8) {
+        // int8_t
         uint8_t v;
         if (!readBytes(enc, 1)) return NULL;
         v = enc[0];
         val = (int8_t)v;
     } else if (enctype == REDIS_RDB_ENC_INT16) {
+        // int16_t
         uint16_t v;
         if (!readBytes(enc, 2)) return NULL;
         v = enc[0]|(enc[1]<<8);
         val = (int16_t)v;
     } else if (enctype == REDIS_RDB_ENC_INT32) {
+        // int32_t
         uint32_t v;
         if (!readBytes(enc, 4)) return NULL;
         v = enc[0]|(enc[1]<<8)|(enc[2]<<16)|(enc[3]<<24);
@@ -285,6 +342,7 @@ char *loadIntegerObject(int enctype) {
     /* convert val into string */
     char *buf;
     buf = malloc(sizeof(char) * 128);
+    // long long -> string
     sprintf(buf, "%lld", val);
     return buf;
 }
@@ -313,19 +371,27 @@ char* loadLzfStringObject() {
 }
 
 /* returns NULL when not processable, char* when valid */
+
+//---------------------------------------------------------------------
+// REDIS_ENCODING_RAW 编码方式的字符串
+//---------------------------------------------------------------------
 char* loadStringObject() {
     uint32_t offset = CURR_OFFSET;
     int isencoded;
     uint32_t len;
 
+    // isencoded = 1 时
+    // len 位编码方式
     len = loadLength(&isencoded);
     if (isencoded) {
         switch(len) {
+        // 有符号整数的字符串
         case REDIS_RDB_ENC_INT8:
         case REDIS_RDB_ENC_INT16:
         case REDIS_RDB_ENC_INT32:
             return loadIntegerObject(len);
         case REDIS_RDB_ENC_LZF:
+            // lzf 压缩过的字符串
             return loadLzfStringObject();
         default:
             /* unknown encoding */
@@ -336,6 +402,9 @@ char* loadStringObject() {
 
     if (len == REDIS_RDB_LENERR) return NULL;
 
+    // isencoded = 0 时
+    // len 位字符串长度
+    // <len><content>
     char *buf = malloc(sizeof(char) * (len+1));
     if (buf == NULL) return NULL;
     buf[len] = '\0';
@@ -363,6 +432,12 @@ int processStringObject(char** store) {
     return 1;
 }
 
+
+//---------------------------------------------------------------------
+// 读取浮点数
+//
+// <len><double value string>
+//---------------------------------------------------------------------
 double* loadDoubleValue() {
     char buf[256];
     unsigned char len;
@@ -403,11 +478,17 @@ int processDoubleValue(double** store) {
     return 1;
 }
 
+
+//---------------------------------------------------------------------
+// 加载键值对
+//---------------------------------------------------------------------
 int loadPair(entry *e) {
+    // e->type 位值的类型
     uint32_t offset = CURR_OFFSET;
     uint32_t i;
 
     /* read key first */
+    // 读取字符串格式的键
     char *key;
     if (processStringObject(&key)) {
         e->key = key;
@@ -417,6 +498,7 @@ int loadPair(entry *e) {
     }
 
     uint32_t length = 0;
+    // 其他 4 中类型先读取其长度
     if (e->type == REDIS_LIST ||
         e->type == REDIS_SET  ||
         e->type == REDIS_ZSET ||
@@ -434,6 +516,9 @@ int loadPair(entry *e) {
     case REDIS_SET_INTSET:
     case REDIS_ZSET_ZIPLIST:
     case REDIS_HASH_ZIPLIST:
+        // 字符串或压缩列表之类的类型直接当作带长度的字符串读取
+        // 因为这里只是检查而不是完整的加载 RDB 文件
+        // <len><data>
         if (!processStringObject(NULL)) {
             SHIFT_ERROR(offset, "Error reading entry value");
             return 0;
@@ -443,6 +528,8 @@ int loadPair(entry *e) {
     case REDIS_SET:
         for (i = 0; i < length; i++) {
             offset = CURR_OFFSET;
+            // list
+            //   <list-len><node-1><node-2>...
             if (!processStringObject(NULL)) {
                 SHIFT_ERROR(offset, "Error reading element at index %d (length: %d)", i, length);
                 return 0;
@@ -450,6 +537,10 @@ int loadPair(entry *e) {
         }
     break;
     case REDIS_ZSET:
+        // <skiplist-len><value-1><score-1>...
+        //
+        // value 为字符串
+        // score 为 double
         for (i = 0; i < length; i++) {
             offset = CURR_OFFSET;
             if (!processStringObject(NULL)) {
@@ -464,6 +555,7 @@ int loadPair(entry *e) {
         }
     break;
     case REDIS_HASH:
+        // <dict-len><key-1><value-1>...
         for (i = 0; i < length; i++) {
             offset = CURR_OFFSET;
             if (!processStringObject(NULL)) {
@@ -481,12 +573,15 @@ int loadPair(entry *e) {
         SHIFT_ERROR(offset, "Type not implemented");
         return 0;
     }
+
     /* because we're done, we assume success */
+    // 读取成功
     e->success = 1;
     return 1;
 }
 
 entry loadEntry() {
+    // key, type, success
     entry e = { NULL, -1, 0 };
     uint32_t length, offset[4];
 
@@ -494,12 +589,14 @@ entry loadEntry() {
     errors.level = 0;
 
     offset[0] = CURR_OFFSET;
+    // 读类型（1 个字节）
     if (!loadType(&e)) {
         return e;
     }
 
     offset[1] = CURR_OFFSET;
     if (e.type == REDIS_SELECTDB) {
+        // SELECT-DB
         if ((length = loadLength(NULL)) == REDIS_RDB_LENERR) {
             SHIFT_ERROR(offset[1], "Error reading database number");
             return e;
@@ -509,6 +606,8 @@ entry loadEntry() {
             return e;
         }
     } else if (e.type == REDIS_EOF) {
+        // EOF
+        // 此时 offset 应该等于 size
         if (positions[level].offset < positions[level].size) {
             SHIFT_ERROR(offset[0], "Unexpected EOF");
         } else {
@@ -517,6 +616,7 @@ entry loadEntry() {
         return e;
     } else {
         /* optionally consume expire */
+        // 可选的过期时间
         if (e.type == REDIS_EXPIRETIME ||
             e.type == REDIS_EXPIRETIME_MS) {
             if (!processTime(e.type)) return e;
@@ -524,6 +624,7 @@ entry loadEntry() {
         }
 
         offset[1] = CURR_OFFSET;
+        // 加载键值对
         if (!loadPair(&e)) {
             SHIFT_ERROR(offset[1], "Error for type %s", types[e.type]);
             return e;
@@ -533,6 +634,7 @@ entry loadEntry() {
     /* all entries are followed by a valid type:
      * e.g. a new entry, SELECTDB, EXPIRE, EOF */
     offset[2] = CURR_OFFSET;
+    // 每个 entry 读完紧接着下一个字节应该是一个合法的 entry_type
     if (peekType() == -1) {
         SHIFT_ERROR(offset[2], "Followed by invalid type");
         SHIFT_ERROR(offset[0], "Error for type %s", types[e.type]);
@@ -603,9 +705,18 @@ void printErrorStack(entry *e) {
     }
 }
 
+
+//---------------------------------------------------------------------
+// check 处理过程
+//
+// ==== Processed 1283 valid opcodes (in 598966 bytes) ============================
+// CRC64 checksum is OK
+//---------------------------------------------------------------------
 void process(void) {
     uint64_t num_errors = 0, num_valid_ops = 0, num_valid_bytes = 0;
     entry entry;
+    // dump_version
+    // RDB 文件格式的版本号
     int dump_version = processHeader();
 
     /* Exclude the final checksum for RDB >= 5. Will be checked at the end. */
@@ -614,15 +725,19 @@ void process(void) {
             printf("RDB version >= 5 but no room for checksum.\n");
             exit(1);
         }
+        // 跳过文件结尾 8 个字节的校验值
         positions[0].size -= 8;
     }
 
+    // level 置为 1
+    // positions[1] 位当前 position
     level = 1;
     while(positions[0].offset < positions[0].size) {
         positions[1] = positions[0];
 
         entry = loadEntry();
         if (!entry.success) {
+            // 读取一个 entry 失败
             printValid(num_valid_ops, num_valid_bytes);
             printErrorStack(&entry);
             num_errors++;
@@ -630,6 +745,7 @@ void process(void) {
             num_valid_bytes = 0;
 
             /* search for next valid entry */
+            // 从之前位置的下一个字节开始查找
             uint64_t offset = positions[0].offset + 1;
             int i = 0;
 
@@ -637,6 +753,7 @@ void process(void) {
                 positions[1].offset = offset;
 
                 /* find 3 consecutive valid entries */
+                // 最多找 3 次
                 for (i = 0; i < 3; i++) {
                     entry = loadEntry();
                     if (!entry.success) break;
@@ -648,12 +765,14 @@ void process(void) {
             }
 
             /* print how many bytes we have skipped to find a new valid opcode */
+            // 打印跳过的无效字节
             if (offset < positions[0].size) {
                 printSkipped(offset - positions[0].offset, offset);
             }
 
             positions[0].offset = offset;
         } else {
+            // 读取一个 entry 成功
             num_valid_ops++;
             num_valid_bytes += positions[1].offset - positions[0].offset;
 
@@ -681,7 +800,9 @@ void process(void) {
     }
 
     /* Verify checksum */
+    // 核对校验值
     if (dump_version >= 5) {
+        // crc64 校验值
         uint64_t crc = crc64(0,positions[0].data,positions[0].size);
         uint64_t crc2;
         unsigned char *p = (unsigned char*)positions[0].data+positions[0].size;
@@ -734,6 +855,7 @@ int main(int argc, char **argv) {
         ERROR("Cannot check dump files >2GB on a 32-bit platform\n");
     }
 
+    // 用 mmap 方式映射整个文件到内存中
     data = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
     if (data == MAP_FAILED) {
         ERROR("Cannot mmap: %s\n", argv[1]);
