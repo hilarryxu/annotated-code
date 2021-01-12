@@ -2254,8 +2254,9 @@ int processCommand(redisClient *c) {
         c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand)
     {
-        // pipeline 情况下，先入队列
+        // multi 情况下，先入队列
         queueMultiCommand(c);
+        // 返回 QUEUED 响应
         addReply(c,shared.queued);
     } else {
         // 执行命令

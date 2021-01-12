@@ -468,8 +468,14 @@ typedef struct multiCmd {
     struct redisCommand *cmd;
 } multiCmd;
 
+
+//---------------------------------------------------------------------
+// multi 状态结构体
+//---------------------------------------------------------------------
 typedef struct multiState {
+    // 命令队列
     multiCmd *commands;     /* Array of MULTI commands */
+    // 命令个数
     int count;              /* Total number of MULTI commands */
     int minreplicas;        /* MINREPLICAS for synchronous replication */
     time_t minreplicas_timeout; /* MINREPLICAS timeout as unixtime. */
