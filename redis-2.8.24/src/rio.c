@@ -44,6 +44,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+//=====================================================================
+// 流式 IO 接口的抽象
+//=====================================================================
+
 
 #include "fmacros.h"
 #include <string.h>
@@ -54,6 +58,10 @@
 #include "crc64.h"
 #include "config.h"
 #include "redis.h"
+
+//=====================================================================
+// 内存 IO 读写实现
+//=====================================================================
 
 /* ------------------------- Buffer I/O implementation ----------------------- */
 
@@ -103,6 +111,11 @@ void rioInitWithBuffer(rio *r, sds s) {
     r->io.buffer.pos = 0;
 }
 
+
+//=====================================================================
+// 标准文件 IO 读写实现
+//=====================================================================
+
 /* --------------------- Stdio file pointer implementation ------------------- */
 
 /* Returns 1 or 0 for success/failure. */
@@ -112,11 +125,15 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
     retval = fwrite(buf,len,1,r->io.file.fp);
     r->io.file.buffered += len;
 
+    // 检查已写入字节数，超过限制自动 fsync
     if (r->io.file.autosync &&
         r->io.file.buffered >= r->io.file.autosync)
     {
+        // flush 文件缓冲
         fflush(r->io.file.fp);
+        // 调用 fsync 刷盘
         aof_fsync(fileno(r->io.file.fp));
+        // 重置已缓冲计数
         r->io.file.buffered = 0;
     }
     return retval;
@@ -156,6 +173,13 @@ void rioInitWithFile(rio *r, FILE *fp) {
     r->io.file.buffered = 0;
     r->io.file.autosync = 0;
 }
+
+
+//=====================================================================
+// fdset IO 读写实现
+//
+// 类型 iovec 那种多输入输出端
+//=====================================================================
 
 /* ------------------- File descriptors set implementation ------------------- */
 
@@ -286,6 +310,10 @@ void rioFreeFdset(rio *r) {
 
 /* This function can be installed both in memory and file streams when checksum
  * computation is needed. */
+
+//---------------------------------------------------------------------
+// 通用校验和计算函数
+//---------------------------------------------------------------------
 void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len) {
     r->cksum = crc64(r->cksum,buf,len);
 }
@@ -298,7 +326,12 @@ void rioGenericUpdateChecksum(rio *r, const void *buf, size_t len) {
  * buffers sometimes the OS buffers way too much, resulting in too many
  * disk I/O concentrated in very little time. When we fsync in an explicit
  * way instead the I/O pressure is more distributed across time. */
+
+//---------------------------------------------------------------------
+// 设置写入多少数据后要主动 fsync 一次
+//---------------------------------------------------------------------
 void rioSetAutoSync(rio *r, off_t bytes) {
+    // 文件实现方式时才有效
     redisAssert(r->read == rioFileIO.read);
     r->io.file.autosync = bytes;
 }
@@ -309,6 +342,10 @@ void rioSetAutoSync(rio *r, off_t bytes) {
  * generating the Redis protocol for the Append Only File. */
 
 /* Write multi bulk count in the format: "*<count>\r\n". */
+
+//---------------------------------------------------------------------
+// 写入 *<count>\r\n
+//---------------------------------------------------------------------
 size_t rioWriteBulkCount(rio *r, char prefix, int count) {
     char cbuf[128];
     int clen;
@@ -322,6 +359,10 @@ size_t rioWriteBulkCount(rio *r, char prefix, int count) {
 }
 
 /* Write binary-safe string in the format: "$<count>\r\n<payload>\r\n". */
+
+//---------------------------------------------------------------------
+// 写入 $<count>\r\n<string>\r\n
+//---------------------------------------------------------------------
 size_t rioWriteBulkString(rio *r, const char *buf, size_t len) {
     size_t nwritten;
 
@@ -332,6 +373,10 @@ size_t rioWriteBulkString(rio *r, const char *buf, size_t len) {
 }
 
 /* Write a long long value in format: "$<count>\r\n<payload>\r\n". */
+
+//---------------------------------------------------------------------
+// 写入 $<count>\r\n<long long>\r\n
+//---------------------------------------------------------------------
 size_t rioWriteBulkLongLong(rio *r, long long l) {
     char lbuf[32];
     unsigned int llen;
@@ -341,10 +386,15 @@ size_t rioWriteBulkLongLong(rio *r, long long l) {
 }
 
 /* Write a double value in the format: "$<count>\r\n<payload>\r\n" */
+
+//---------------------------------------------------------------------
+// 写入 $<count>\r\n<double>\r\n
+//---------------------------------------------------------------------
 size_t rioWriteBulkDouble(rio *r, double d) {
     char dbuf[128];
     unsigned int dlen;
 
+    // 取出 double 值的字符串表示（小数点后只保留 17 位）
     dlen = snprintf(dbuf,sizeof(dbuf),"%.17g",d);
     return rioWriteBulkString(r,dbuf,dlen);
 }

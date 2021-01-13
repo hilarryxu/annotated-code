@@ -38,6 +38,10 @@
 
 /* The current RDB version. When the format changes in a way that is no longer
  * backward compatible this number gets incremented. */
+
+//---------------------------------------------------------------------
+// RDB 文件格式版本号 v6
+//---------------------------------------------------------------------
 #define REDIS_RDB_VERSION 6
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
@@ -53,6 +57,10 @@
  *
  * Lengths up to 63 are stored using a single byte, most DB keys, and may
  * values, will fit inside. */
+
+//---------------------------------------------------------------------
+// 长度编码基本类型
+//---------------------------------------------------------------------
 #define REDIS_RDB_6BITLEN 0
 #define REDIS_RDB_14BITLEN 1
 #define REDIS_RDB_32BITLEN 2
@@ -62,6 +70,9 @@
 /* When a length of a string object stored on disk has the first two bits
  * set, the remaining two bits specify a special encoding for the object
  * accordingly to the following defines: */
+//---------------------------------------------------------------------
+// 长度编码扩展类型
+//---------------------------------------------------------------------
 #define REDIS_RDB_ENC_INT8 0        /* 8 bit signed integer */
 #define REDIS_RDB_ENC_INT16 1       /* 16 bit signed integer */
 #define REDIS_RDB_ENC_INT32 2       /* 32 bit signed integer */
@@ -69,6 +80,10 @@
 
 /* Dup object types to RDB object types. Only reason is readability (are we
  * dealing with RDB types or with in-memory object types?). */
+
+//---------------------------------------------------------------------
+// 数据格式类型
+//---------------------------------------------------------------------
 #define REDIS_RDB_TYPE_STRING 0
 #define REDIS_RDB_TYPE_LIST   1
 #define REDIS_RDB_TYPE_SET    2
@@ -83,9 +98,17 @@
 #define REDIS_RDB_TYPE_HASH_ZIPLIST  13
 
 /* Test if a type is an object type. */
+
+//---------------------------------------------------------------------
+// 判断 opcode 是否为数据格式类型
+//---------------------------------------------------------------------
 #define rdbIsObjectType(t) ((t >= 0 && t <= 4) || (t >= 9 && t <= 13))
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
+
+//---------------------------------------------------------------------
+// 其他特殊 opcode
+//---------------------------------------------------------------------
 #define REDIS_RDB_OPCODE_EXPIRETIME_MS 252
 #define REDIS_RDB_OPCODE_EXPIRETIME 253
 #define REDIS_RDB_OPCODE_SELECTDB   254
