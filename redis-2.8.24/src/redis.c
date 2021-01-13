@@ -1134,13 +1134,16 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         int statloc;
         pid_t pid;
 
+        // 非阻塞方式检查子进程是否退出
         if ((pid = wait3(&statloc,WNOHANG,NULL)) != 0) {
             int exitcode = WEXITSTATUS(statloc);
             int bysignal = 0;
 
+            // 取得子进程因信号而中止的信号
             if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
             if (pid == server.rdb_child_pid) {
+                // BGSAVE 子进程退出信号处理函数
                 backgroundSaveDoneHandler(exitcode,bysignal);
             } else if (pid == server.aof_child_pid) {
                 backgroundRewriteDoneHandler(exitcode,bysignal);

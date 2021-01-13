@@ -109,9 +109,14 @@
 //---------------------------------------------------------------------
 // 其他特殊 opcode
 //---------------------------------------------------------------------
+
+// 毫秒级别的过期时间
 #define REDIS_RDB_OPCODE_EXPIRETIME_MS 252
+// 秒级别的过期时间
 #define REDIS_RDB_OPCODE_EXPIRETIME 253
+// 选择数据库
 #define REDIS_RDB_OPCODE_SELECTDB   254
+// 数据库结尾（不是 RDB 文件结尾）
 #define REDIS_RDB_OPCODE_EOF        255
 
 int rdbSaveType(rio *rdb, unsigned char type);

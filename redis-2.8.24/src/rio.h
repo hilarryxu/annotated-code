@@ -97,9 +97,11 @@ struct _rio {
 
         /* Multiple FDs target (used to write to N sockets). */
         struct {
+            // tcp socket fds
             int *fds;       /* File descriptors. */
             int *state;     /* Error state of each fd. 0 (if ok) or errno. */
             int numfds;
+            // 临时缓冲区
             off_t pos;
             sds buf;
         } fdset;

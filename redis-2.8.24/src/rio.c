@@ -213,8 +213,10 @@ static size_t rioFdsetWrite(rio *r, const void *buf, size_t len) {
      * parallelize while the kernel is sending data in background to
      * the TCP socket. */
     while(len) {
+        // 每次发送 1KB
         size_t count = len < 1024 ? len : 1024;
         int broken = 0;
+        // 遍历 tcp socket fds 依次发送数据
         for (j = 0; j < r->io.fdset.numfds; j++) {
             if (r->io.fdset.state[j] != 0) {
                 /* Skip FDs alraedy in error. */
@@ -255,6 +257,10 @@ static size_t rioFdsetWrite(rio *r, const void *buf, size_t len) {
 }
 
 /* Returns 1 or 0 for success/failure. */
+
+//---------------------------------------------------------------------
+// 不支持读操作
+//---------------------------------------------------------------------
 static size_t rioFdsetRead(rio *r, void *buf, size_t len) {
     REDIS_NOTUSED(r);
     REDIS_NOTUSED(buf);
