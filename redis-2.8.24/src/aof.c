@@ -451,6 +451,10 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
     return buf;
 }
 
+
+//---------------------------------------------------------------------
+// 将那些会修改数据库状态的写操作添加到 AOF 缓冲区中
+//---------------------------------------------------------------------
 void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
     sds buf = sdsempty();
     robj *tmpargv[3];

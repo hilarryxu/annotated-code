@@ -75,6 +75,13 @@
  * This lowers the constant times considerably.
  */
 
+//=====================================================================
+// 键值对较少时用数组实现的散列表
+//
+// 从 2.6 版本开始， Redis 使用 ziplist 来表示小 Hash
+// 具体讨论见：https://github.com/redis/redis/issues/188
+//=====================================================================
+
 #include <stdio.h>
 #include <string.h>
 #include "zmalloc.h"

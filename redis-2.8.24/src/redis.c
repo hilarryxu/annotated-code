@@ -1974,6 +1974,10 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
  * + REDIS_PROPAGATE_AOF (propagate into the AOF file if is enabled)
  * + REDIS_PROPAGATE_REPL (propagate into the replication link)
  */
+
+//---------------------------------------------------------------------
+// 将命令发送给 AOF 缓冲、salve 从服务器
+//---------------------------------------------------------------------
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
