@@ -36,6 +36,7 @@
 #include <sys/stat.h>
 #include "config.h"
 
+// 0x%16llx 输出 off_t
 #define ERROR(...) { \
     char __buf[1024]; \
     sprintf(__buf, __VA_ARGS__); \
@@ -45,6 +46,10 @@
 static char error[1024];
 static off_t epos;
 
+
+//---------------------------------------------------------------------
+// 检测接下来的数据是否为 \r\n
+//---------------------------------------------------------------------
 int consumeNewline(char *buf) {
     if (strncmp(buf,"\r\n",2) != 0) {
         ERROR("Expected \\r\\n, got: %02x%02x",buf[0],buf[1]);
@@ -53,6 +58,10 @@ int consumeNewline(char *buf) {
     return 1;
 }
 
+
+//---------------------------------------------------------------------
+// 读取 <prefix><long>\r\n
+//---------------------------------------------------------------------
 int readLong(FILE *fp, char prefix, long *target) {
     char buf[128], *eptr;
     epos = ftello(fp);
@@ -67,6 +76,10 @@ int readLong(FILE *fp, char prefix, long *target) {
     return consumeNewline(eptr);
 }
 
+
+//---------------------------------------------------------------------
+// 读取指定字节数的数据
+//---------------------------------------------------------------------
 int readBytes(FILE *fp, char *target, long length) {
     long real;
     epos = ftello(fp);
@@ -78,6 +91,10 @@ int readBytes(FILE *fp, char *target, long length) {
     return 1;
 }
 
+
+//---------------------------------------------------------------------
+// 读取 $<len>\r\n<payload>\r\n
+//---------------------------------------------------------------------
 int readString(FILE *fp, char** target) {
     long len;
     *target = NULL;
@@ -102,6 +119,10 @@ int readArgc(FILE *fp, long *target) {
     return readLong(fp,'*',target);
 }
 
+
+//---------------------------------------------------------------------
+// 检查 AOF 文件
+//---------------------------------------------------------------------
 off_t process(FILE *fp) {
     long argc;
     off_t pos = 0;
@@ -110,11 +131,13 @@ off_t process(FILE *fp) {
 
     while(1) {
         if (!multi) pos = ftello(fp);
+        // 读命令参数个数
         if (!readArgc(fp, &argc)) break;
 
         for (i = 0; i < argc; i++) {
             if (!readString(fp,&str)) break;
             if (i == 0) {
+                // 检测 multi exec 是否成对匹配
                 if (strcasecmp(str, "multi") == 0) {
                     if (multi++) {
                         ERROR("Unexpected MULTI");
@@ -131,18 +154,25 @@ off_t process(FILE *fp) {
         }
 
         /* Stop if the loop did not finish */
+        // 上面循环中间退出说明参数个数不正确
         if (i < argc) {
             if (str) free(str);
+            // 退出检查
             break;
         }
     }
 
+    // 判断是否整个文件检查完
+    // multi exec 是否成对匹配
+    // 中间过程是否有错误
     if (feof(fp) && multi && strlen(error) == 0) {
         ERROR("Reached EOF before reading EXEC for MULTI");
     }
     if (strlen(error) > 0) {
         printf("%s\n", error);
     }
+
+    // 返回读完后的偏移量
     return pos;
 }
 
@@ -179,6 +209,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
+    // 用 off_t 存储文件大小
     off_t size = sb.st_size;
     if (size == 0) {
         printf("Empty file: %s\n", filename);
@@ -187,6 +218,7 @@ int main(int argc, char **argv) {
 
     off_t pos = process(fp);
     off_t diff = size-pos;
+    // 输出 long long 用 %lld
     printf("AOF analyzed: size=%lld, ok_up_to=%lld, diff=%lld\n",
         (long long) size, (long long) pos, (long long) diff);
     if (diff > 0) {
@@ -199,6 +231,7 @@ int main(int argc, char **argv) {
                     printf("Aborting...\n");
                     exit(1);
             }
+            // 截断 aof 文件，丢弃后面损坏的部分
             if (ftruncate(fileno(fp), pos) == -1) {
                 printf("Failed to truncate AOF\n");
                 exit(1);
