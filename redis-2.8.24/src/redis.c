@@ -1229,6 +1229,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors. */
+
+//---------------------------------------------------------------------
+// 每次事件循环之前执行该函数
+//---------------------------------------------------------------------
 void beforeSleep(struct aeEventLoop *eventLoop) {
     REDIS_NOTUSED(eventLoop);
     listNode *ln;
@@ -1236,6 +1240,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
+    // 过期键处理
     if (server.active_expire_enabled && server.masterhost == NULL)
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
@@ -1256,6 +1261,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* Write the AOF buffer on disk */
+    // 每次事件循环之前冲刷一下 AOF 缓冲区到磁盘文件
     flushAppendOnlyFile(0);
 }
 

@@ -55,8 +55,18 @@ void aofUpdateCurrentSize(void);
  * AOF_RW_BUF_BLOCK_SIZE bytes.
  * ------------------------------------------------------------------------- */
 
+
+//=====================================================================
+// AOF rewrite 缓冲区相关
+//=====================================================================
+
+// 10MB 缓冲区大小
 #define AOF_RW_BUF_BLOCK_SIZE (1024*1024*10)    /* 10 MB per block */
 
+
+//---------------------------------------------------------------------
+// 链表串联起来的缓冲区
+//---------------------------------------------------------------------
 typedef struct aofrwblock {
     unsigned long used, free;
     char buf[AOF_RW_BUF_BLOCK_SIZE];
@@ -65,6 +75,10 @@ typedef struct aofrwblock {
 /* This function free the old AOF rewrite buffer if needed, and initialize
  * a fresh new one. It tests for server.aof_rewrite_buf_blocks equal to NULL
  * so can be used for the first initialization as well. */
+
+//---------------------------------------------------------------------
+// 重置 rewrite 缓冲区链表
+//---------------------------------------------------------------------
 void aofRewriteBufferReset(void) {
     if (server.aof_rewrite_buf_blocks)
         listRelease(server.aof_rewrite_buf_blocks);
@@ -74,6 +88,12 @@ void aofRewriteBufferReset(void) {
 }
 
 /* Return the current size of the AOF rewrite buffer. */
+
+//---------------------------------------------------------------------
+// 计算总的 rewrite 缓冲区大小
+//
+// 除最后一个节点可不存满外，前面的节点都存满 AOF_RW_BUF_BLOCK_SIZE
+//---------------------------------------------------------------------
 unsigned long aofRewriteBufferSize(void) {
     listNode *ln = listLast(server.aof_rewrite_buf_blocks);
     aofrwblock *block = ln ? ln->value : NULL;
@@ -86,6 +106,10 @@ unsigned long aofRewriteBufferSize(void) {
 }
 
 /* Append data to the AOF rewrite buffer, allocating new blocks if needed. */
+
+//---------------------------------------------------------------------
+// 追加数据到 rewrite 缓冲区链表中
+//---------------------------------------------------------------------
 void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
     listNode *ln = listLast(server.aof_rewrite_buf_blocks);
     aofrwblock *block = ln ? ln->value : NULL;
@@ -104,6 +128,7 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
             }
         }
 
+        // 还没写完，需要新分配 block
         if (len) { /* First block to allocate, or need another block. */
             int numblocks;
 
@@ -128,6 +153,13 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
 /* Write the buffer (possibly composed of multiple blocks) into the specified
  * fd. If a short write or any other error happens -1 is returned,
  * otherwise the number of bytes written is returned. */
+
+//---------------------------------------------------------------------
+// 将 rewrite 缓冲写入文件
+//
+// 成功时返回写入的字节数
+// 写出错或者部分写入时返回 -1
+//---------------------------------------------------------------------
 ssize_t aofRewriteBufferWrite(int fd) {
     listNode *ln;
     listIter li;
@@ -162,24 +194,36 @@ void aof_background_fsync(int fd) {
 
 /* Called when the user switches from "appendonly yes" to "appendonly no"
  * at runtime using the CONFIG command. */
+
+//---------------------------------------------------------------------
+// appendonly no
+//---------------------------------------------------------------------
 void stopAppendOnly(void) {
     redisAssert(server.aof_state != REDIS_AOF_OFF);
+    // 冲刷 AOF 缓冲区
     flushAppendOnlyFile(1);
+    // fsync 刷盘
     aof_fsync(server.aof_fd);
+    // 关闭文件
     close(server.aof_fd);
 
+    // 重置状态
     server.aof_fd = -1;
     server.aof_selected_db = -1;
     server.aof_state = REDIS_AOF_OFF;
     /* rewrite operation in progress? kill it, wait child exit */
+    // 杀死 rewrite 进程
     if (server.aof_child_pid != -1) {
         int statloc;
 
         redisLog(REDIS_NOTICE,"Killing running AOF rewrite child: %ld",
             (long) server.aof_child_pid);
+        // SIGUSR1
         if (kill(server.aof_child_pid,SIGUSR1) != -1)
+            // 阻塞等待进程结束
             wait3(&statloc,0,NULL);
         /* reset the buffer accumulating changes while the child saves */
+        // 清空 rewrite 缓冲区，并删除临时文件
         aofRewriteBufferReset();
         aofRemoveTempFile(server.aof_child_pid);
         server.aof_child_pid = -1;
@@ -189,6 +233,10 @@ void stopAppendOnly(void) {
 
 /* Called when the user switches from "appendonly no" to "appendonly yes"
  * at runtime using the CONFIG command. */
+
+//---------------------------------------------------------------------
+// appendonly yes
+//---------------------------------------------------------------------
 int startAppendOnly(void) {
     server.aof_last_fsync = server.unixtime;
     server.aof_fd = open(server.aof_filename,O_WRONLY|O_APPEND|O_CREAT,0644);
@@ -197,6 +245,7 @@ int startAppendOnly(void) {
         redisLog(REDIS_WARNING,"Redis needs to enable the AOF but can't open the append only file: %s",strerror(errno));
         return REDIS_ERR;
     }
+    // 启动后台 rewrite 进程
     if (rewriteAppendOnlyFileBackground() == REDIS_ERR) {
         close(server.aof_fd);
         redisLog(REDIS_WARNING,"Redis needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
@@ -204,6 +253,7 @@ int startAppendOnly(void) {
     }
     /* We correctly switched on AOF, now wait for the rewrite to be complete
      * in order to append data on disk. */
+    // 状态置为 REDIS_AOF_WAIT_REWRITE，即等待 rewrite 完成
     server.aof_state = REDIS_AOF_WAIT_REWRITE;
     return REDIS_OK;
 }
@@ -227,11 +277,18 @@ int startAppendOnly(void) {
  * However if force is set to 1 we'll write regardless of the background
  * fsync. */
 #define AOF_WRITE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
+
+//---------------------------------------------------------------------
+// 将 AOF 缓冲写入文件
+//
+// 该函数调用频率是多少？
+//---------------------------------------------------------------------
 void flushAppendOnlyFile(int force) {
     ssize_t nwritten;
     int sync_in_progress = 0;
     mstime_t latency;
 
+    // 缓冲区空的，直接返回
     if (sdslen(server.aof_buf) == 0) return;
 
     if (server.aof_fsync == AOF_FSYNC_EVERYSEC)
@@ -265,6 +322,7 @@ void flushAppendOnlyFile(int force) {
      * or alike */
 
     latencyStartMonitor(latency);
+    // 缓冲写入文件
     nwritten = write(server.aof_fd,server.aof_buf,sdslen(server.aof_buf));
     latencyEndMonitor(latency);
     /* We want to capture different events for delayed writes:
@@ -285,6 +343,7 @@ void flushAppendOnlyFile(int force) {
     server.aof_flush_postponed_start = 0;
 
     if (nwritten != (signed)sdslen(server.aof_buf)) {
+        // 写失败了
         static time_t last_write_error_log = 0;
         int can_log = 0;
 
@@ -296,12 +355,14 @@ void flushAppendOnlyFile(int force) {
 
         /* Log the AOF write error and record the error code. */
         if (nwritten == -1) {
+            // IO 错误
             if (can_log) {
                 redisLog(REDIS_WARNING,"Error writing to the AOF file: %s",
                     strerror(errno));
                 server.aof_last_write_errno = errno;
             }
         } else {
+            // 只写入了一部分数据
             if (can_log) {
                 redisLog(REDIS_WARNING,"Short write while writing to "
                                        "the AOF file: (nwritten=%lld, "
@@ -310,6 +371,7 @@ void flushAppendOnlyFile(int force) {
                                        (long long)sdslen(server.aof_buf));
             }
 
+            // 把刚部分写入的数据从文件尾部删掉
             if (ftruncate(server.aof_fd, server.aof_current_size) == -1) {
                 if (can_log) {
                     redisLog(REDIS_WARNING, "Could not remove short write "
@@ -341,13 +403,17 @@ void flushAppendOnlyFile(int force) {
 
             /* Trim the sds buffer if there was a partial write, and there
              * was no way to undo it with ftruncate(2). */
+            // ftruncate 失败，那就部分写入文件并调整去掉缓冲区部分写入的数据
             if (nwritten > 0) {
                 server.aof_current_size += nwritten;
                 sdsrange(server.aof_buf,nwritten,-1);
             }
+
+            // 然后返回，等待下一次 flush
             return; /* We'll try again on the next call... */
         }
     } else {
+        // 写成功了
         /* Successful write(2). If AOF was in error state, restore the
          * OK state and log the event. */
         if (server.aof_last_write_status == REDIS_ERR) {
@@ -356,16 +422,20 @@ void flushAppendOnlyFile(int force) {
             server.aof_last_write_status = REDIS_OK;
         }
     }
+    // 更新 AOF 文件大小信息
     server.aof_current_size += nwritten;
 
     /* Re-use AOF buffer when it is small enough. The maximum comes from the
      * arena size of 4k minus some overhead (but is otherwise arbitrary). */
+    // 缓冲区小于 4KB 时复用，超过了销毁并新建一个空缓冲区
     if ((sdslen(server.aof_buf)+sdsavail(server.aof_buf)) < 4000) {
         sdsclear(server.aof_buf);
     } else {
         sdsfree(server.aof_buf);
         server.aof_buf = sdsempty();
     }
+
+    // fsync 相关处理
 
     /* Don't fsync if no-appendfsync-on-rewrite is set to yes and there are
      * children doing I/O in the background. */
@@ -389,12 +459,17 @@ void flushAppendOnlyFile(int force) {
     }
 }
 
+
+//---------------------------------------------------------------------
+// 将命令序列化为 RESP 协议表示形式
+//---------------------------------------------------------------------
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
     char buf[32];
     int len, j;
     robj *o;
 
     buf[0] = '*';
+    // 这里用 long long，读取时好像用的 long？
     len = 1+ll2string(buf+1,sizeof(buf)-1,argc);
     buf[len++] = '\r';
     buf[len++] = '\n';
@@ -461,6 +536,7 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 
     /* The DB this command was targeting is not the same as the last command
      * we appended. To issue a SELECT command is needed. */
+    // 数据库序号不相同，追加一条 SELECT 命令
     if (dictid != server.aof_selected_db) {
         char seldb[64];
 
@@ -473,9 +549,11 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
     if (cmd->proc == expireCommand || cmd->proc == pexpireCommand ||
         cmd->proc == expireatCommand) {
         /* Translate EXPIRE/PEXPIRE/EXPIREAT into PEXPIREAT */
+        // 转义过期时间相关命令统一为 PEXPIREAT
         buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
     } else if (cmd->proc == setexCommand || cmd->proc == psetexCommand) {
         /* Translate SETEX/PSETEX to SET and PEXPIREAT */
+        // 转义 SETEX/PSETEX 命令
         tmpargv[0] = createStringObject("SET",3);
         tmpargv[1] = argv[1];
         tmpargv[2] = argv[3];
@@ -486,12 +564,14 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
         /* All the other commands don't need translation or need the
          * same translation already operated in the command vector
          * for the replication itself. */
+        // 将命令序列化为 RESP 协议表示形式
         buf = catAppendOnlyGenericCommand(buf,argc,argv);
     }
 
     /* Append to the AOF buffer. This will be flushed on disk just before
      * of re-entering the event loop, so before the client will get a
      * positive reply about the operation performed. */
+    // AOF 功能开启状态下，追加到 aof_buf 尾部
     if (server.aof_state == REDIS_AOF_ON)
         server.aof_buf = sdscatlen(server.aof_buf,buf,sdslen(buf));
 
@@ -499,9 +579,12 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
      * accumulate the differences between the child DB and the current one
      * in a buffer, so that when the child process will do its work we
      * can append the differences to the new append only file. */
+    // 如果有后台 rewrite，同时也要追加到 rewrite 暂存缓冲区中
+    // 等 rewrite 结束后更新到 AOF 文件中去，保持数据一致性
     if (server.aof_child_pid != -1)
         aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
 
+    // 释放临时缓冲区
     sdsfree(buf);
 }
 
@@ -511,6 +594,10 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 
 /* In Redis commands are always executed in the context of a client, so in
  * order to load the append only file we need to create a fake client. */
+
+//---------------------------------------------------------------------
+// 创建一个用于命令回放的伪客户端
+//---------------------------------------------------------------------
 struct redisClient *createFakeClient(void) {
     struct redisClient *c = zmalloc(sizeof(*c));
 
@@ -525,6 +612,7 @@ struct redisClient *createFakeClient(void) {
     c->flags = 0;
     /* We set the fake client as a slave waiting for the synchronization
      * so that Redis will not try to send replies to this client. */
+    // 设置 repl 状态为 REDIS_REPL_WAIT_BGSAVE_START
     c->replstate = REDIS_REPL_WAIT_BGSAVE_START;
     c->reply = listCreate();
     c->reply_bytes = 0;
@@ -545,6 +633,10 @@ void freeFakeClientArgv(struct redisClient *c) {
     zfree(c->argv);
 }
 
+
+//---------------------------------------------------------------------
+// 释放伪客户端
+//---------------------------------------------------------------------
 void freeFakeClient(struct redisClient *c) {
     sdsfree(c->querybuf);
     listRelease(c->reply);
@@ -556,6 +648,10 @@ void freeFakeClient(struct redisClient *c) {
 /* Replay the append log file. On success REDIS_OK is returned. On non fatal
  * error (the append only file is zero-length) REDIS_ERR is returned. On
  * fatal error an error message is logged and the program exists. */
+
+//---------------------------------------------------------------------
+// 加载 AOF 文件
+//---------------------------------------------------------------------
 int loadAppendOnlyFile(char *filename) {
     struct redisClient *fakeClient;
     FILE *fp = fopen(filename,"r");
@@ -564,6 +660,7 @@ int loadAppendOnlyFile(char *filename) {
     long loops = 0;
     off_t valid_up_to = 0; /* Offset of the latest well-formed command loaded. */
 
+    // 空文件检测
     if (fp && redis_fstat(fileno(fp),&sb) != -1 && sb.st_size == 0) {
         server.aof_current_size = 0;
         fclose(fp);
@@ -579,9 +676,11 @@ int loadAppendOnlyFile(char *filename) {
      * to the same file we're about to read. */
     server.aof_state = REDIS_AOF_OFF;
 
+    // 创建伪客户端
     fakeClient = createFakeClient();
     startLoading(fp);
 
+    // 循环读取数据
     while(1) {
         int argc, j;
         unsigned long len;
@@ -591,11 +690,13 @@ int loadAppendOnlyFile(char *filename) {
         struct redisCommand *cmd;
 
         /* Serve the clients from time to time */
+        // 每 1000 次循环间隙处理一下客户端请求
         if (!(loops++ % 1000)) {
             loadingProgress(ftello(fp));
             processEventsWhileBlocked();
         }
 
+        // 一次读取 128 字节
         if (fgets(buf,sizeof(buf),fp) == NULL) {
             if (feof(fp))
                 break;
@@ -604,19 +705,24 @@ int loadAppendOnlyFile(char *filename) {
         }
         if (buf[0] != '*') goto fmterr;
         if (buf[1] == '\0') goto readerr;
+        // 读取命令参数个数
         argc = atoi(buf+1);
         if (argc < 1) goto fmterr;
 
+        // 分配 argv 内存
         argv = zmalloc(sizeof(robj*)*argc);
         fakeClient->argc = argc;
         fakeClient->argv = argv;
 
+        // 遍历读取参数
         for (j = 0; j < argc; j++) {
+            // 读取到首个 \r\n 为止
             if (fgets(buf,sizeof(buf),fp) == NULL) {
                 fakeClient->argc = j; /* Free up to j-1. */
                 freeFakeClientArgv(fakeClient);
                 goto readerr;
             }
+            // 判断是否为 bulk string
             if (buf[0] != '$') goto fmterr;
             len = strtol(buf+1,NULL,10);
             argsds = sdsnewlen(NULL,len);
@@ -626,7 +732,9 @@ int loadAppendOnlyFile(char *filename) {
                 freeFakeClientArgv(fakeClient);
                 goto readerr;
             }
+            // 赋值给 argv[j]
             argv[j] = createObject(REDIS_STRING,argsds);
+            // 读取紧接着的 \r\n
             if (fread(buf,2,1,fp) == 0) {
                 fakeClient->argc = j+1; /* Free up to j. */
                 freeFakeClientArgv(fakeClient);
@@ -635,37 +743,49 @@ int loadAppendOnlyFile(char *filename) {
         }
 
         /* Command lookup */
+        // 查找命令
         cmd = lookupCommand(argv[0]->ptr);
         if (!cmd) {
             redisLog(REDIS_WARNING,"Unknown command '%s' reading the append only file", (char*)argv[0]->ptr);
+            // 未知命令直接退出进程
             exit(1);
         }
 
         /* Run the command in the context of a fake client */
+        // 运行命令处理函数
         cmd->proc(fakeClient);
 
         /* The fake client should not have a reply */
+        // 伪客户端不需要返回响应
         redisAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
         /* The fake client should never get blocked */
+        // 伪客户端不会阻塞
         redisAssert((fakeClient->flags & REDIS_BLOCKED) == 0);
 
         /* Clean up. Command code may have changed argv/argc so we use the
          * argv/argc of the client instead of the local variables. */
+        // 释放参数数组
         freeFakeClientArgv(fakeClient);
+        // 更新当前已解析偏移量
         if (server.aof_load_truncated) valid_up_to = ftello(fp);
     }
 
     /* This point can only be reached when EOF is reached without errors.
      * If the client is in the middle of a MULTI/EXEC, log error and quit. */
+    // 检测 MULTI/EXEC 不配对
     if (fakeClient->flags & REDIS_MULTI) goto uxeof;
 
 loaded_ok: /* DB loaded, cleanup and return REDIS_OK to the caller. */
     fclose(fp);
     freeFakeClient(fakeClient);
+    // 恢复 server.aof_state
     server.aof_state = old_aof_state;
     stopLoading();
+    // 记录 AOF 文件大小
     aofUpdateCurrentSize();
+    // 设置 rewrite 的基础偏移量
     server.aof_rewrite_base_size = server.aof_current_size;
+    // 成功返回 REDIS_OK
     return REDIS_OK;
 
 readerr: /* Read error. If feof(fp) is true, fall through to unexpected EOF. */
@@ -710,6 +830,10 @@ fmterr: /* Format error. */
 /* ----------------------------------------------------------------------------
  * AOF rewrite
  * ------------------------------------------------------------------------- */
+
+//=====================================================================
+// AOF rewrite 相关
+//=====================================================================
 
 /* Delegate writing an object to writing a bulk string or bulk long long.
  * This is not placed in rio.c since that adds the redis.h dependency. */
@@ -1133,6 +1257,10 @@ int rewriteAppendOnlyFileBackground(void) {
     return REDIS_OK; /* unreached */
 }
 
+
+//---------------------------------------------------------------------
+// bgrewriteaof 命令
+//---------------------------------------------------------------------
 void bgrewriteaofCommand(redisClient *c) {
     if (server.aof_child_pid != -1) {
         addReplyError(c,"Background append only file rewriting already in progress");
@@ -1146,6 +1274,10 @@ void bgrewriteaofCommand(redisClient *c) {
     }
 }
 
+
+//---------------------------------------------------------------------
+// 删除 AOF 临时文件
+//---------------------------------------------------------------------
 void aofRemoveTempFile(pid_t childpid) {
     char tmpfile[256];
 
@@ -1157,6 +1289,10 @@ void aofRemoveTempFile(pid_t childpid) {
  * to check the size of the file. This is useful after a rewrite or after
  * a restart, normally the size is updated just adding the write length
  * to the current length, that is much faster. */
+
+//---------------------------------------------------------------------
+// 更新 server.aof_current_size 即 AOF 文件的大小
+//---------------------------------------------------------------------
 void aofUpdateCurrentSize(void) {
     struct redis_stat sb;
     mstime_t latency;
