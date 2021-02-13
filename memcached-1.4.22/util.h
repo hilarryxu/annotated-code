@@ -7,11 +7,19 @@
  *
  * returns true if conversion succeeded.
  */
+
+//=====================================================================
+// 更加安全的字符串转长整形函数版本
+//=====================================================================
 bool safe_strtoull(const char *str, uint64_t *out);
 bool safe_strtoll(const char *str, int64_t *out);
 bool safe_strtoul(const char *str, uint32_t *out);
 bool safe_strtol(const char *str, int32_t *out);
 
+
+//=====================================================================
+// 64 位版本的网络字节序转换函数
+//=====================================================================
 #ifndef HAVE_HTONLL
 extern uint64_t htonll(uint64_t);
 extern uint64_t ntohll(uint64_t);

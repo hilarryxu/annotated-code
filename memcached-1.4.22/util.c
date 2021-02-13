@@ -71,6 +71,7 @@ bool safe_strtoul(const char *str, uint32_t *out) {
             /* only check for negative signs in the uncommon case when
              * the unsigned number is so big that it's negative as a
              * signed number. */
+            // 由于是无符号转换，字符串中不应该出现 '-'
             if (strchr(str, '-') != NULL) {
                 return false;
             }
@@ -82,16 +83,24 @@ bool safe_strtoul(const char *str, uint32_t *out) {
     return false;
 }
 
+
+//---------------------------------------------------------------------
+// safe 版本的 strtol
+//---------------------------------------------------------------------
 bool safe_strtol(const char *str, int32_t *out) {
     assert(out != NULL);
     errno = 0;
     *out = 0;
     char *endptr;
+
     long l = strtol(str, &endptr, 10);
+    // 判断超出范围或者字符串中不包含整数
     if ((errno == ERANGE) || (str == endptr)) {
         return false;
     }
 
+    // 结尾为首个空白字符
+    // 或者到达字符串结尾
     if (xisspace(*endptr) || (*endptr == '\0' && endptr != str)) {
         *out = l;
         return true;
@@ -118,6 +127,7 @@ void vperror(const char *fmt, ...) {
 #ifndef HAVE_HTONLL
 static uint64_t mc_swap64(uint64_t in) {
 #ifdef ENDIAN_LITTLE
+    // 反转 64 位无符号整数
     /* Little endian, flip the bytes around until someone makes a faster/better
     * way to do this. */
     int64_t rv = 0;
