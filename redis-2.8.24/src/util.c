@@ -305,26 +305,34 @@ int ll2string(char* dst, size_t dstlen, long long svalue) {
 /* Convert a string into a long long. Returns 1 if the string could be parsed
  * into a (non-overflowing) long long, 0 otherwise. The value will be set to
  * the parsed value when appropriate. */
+
+//---------------------------------------------------------------------
+// 字符串转 long long
+//---------------------------------------------------------------------
 int string2ll(const char *s, size_t slen, long long *value) {
     const char *p = s;
     size_t plen = 0;
     int negative = 0;
+    // 最后会 unsigned long long -> long long
     unsigned long long v;
 
     if (plen == slen)
         return 0;
 
     /* Special case: first and only digit is 0. */
+    // 处理单个 0 字符串
     if (slen == 1 && p[0] == '0') {
         if (value != NULL) *value = 0;
         return 1;
     }
 
+    // 判断符号
     if (p[0] == '-') {
         negative = 1;
         p++; plen++;
 
         /* Abort on only a negative sign. */
+        // 只有一个符号的情况
         if (plen == slen)
             return 0;
     }
@@ -334,17 +342,21 @@ int string2ll(const char *s, size_t slen, long long *value) {
         v = p[0]-'0';
         p++; plen++;
     } else if (p[0] == '0' && slen == 1) {
+        // 单个 0 的情况
         *value = 0;
         return 1;
     } else {
+        // 0123 这种属于非法格式，返回 0
         return 0;
     }
 
     while (plen < slen && p[0] >= '0' && p[0] <= '9') {
+        // 判断溢出
         if (v > (ULLONG_MAX / 10)) /* Overflow. */
             return 0;
         v *= 10;
 
+        // 判断溢出
         if (v > (ULLONG_MAX - (p[0]-'0'))) /* Overflow. */
             return 0;
         v += p[0]-'0';
@@ -353,14 +365,17 @@ int string2ll(const char *s, size_t slen, long long *value) {
     }
 
     /* Return if not all bytes were used. */
+    // 没有处理完所有字符串返回失败
     if (plen < slen)
         return 0;
 
     if (negative) {
+        // 负数溢出判断
         if (v > ((unsigned long long)(-(LLONG_MIN+1))+1)) /* Overflow. */
             return 0;
         if (value != NULL) *value = -v;
     } else {
+        // 正数超过 LONG_MAX
         if (v > LLONG_MAX) /* Overflow. */
             return 0;
         if (value != NULL) *value = v;
@@ -371,15 +386,21 @@ int string2ll(const char *s, size_t slen, long long *value) {
 /* Convert a string into a long. Returns 1 if the string could be parsed into a
  * (non-overflowing) long, 0 otherwise. The value will be set to the parsed
  * value when appropriate. */
+
+//---------------------------------------------------------------------
+// 字符串转 long
+//---------------------------------------------------------------------
 int string2l(const char *s, size_t slen, long *lval) {
     long long llval;
 
     if (!string2ll(s,slen,&llval))
         return 0;
 
+    // 判断是否超出 long 的范围
     if (llval < LONG_MIN || llval > LONG_MAX)
         return 0;
 
+    // long long -> long
     *lval = (long)llval;
     return 1;
 }
